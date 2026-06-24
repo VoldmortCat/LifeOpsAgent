@@ -1,0 +1,217 @@
+<mxfile host="Electron" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/26.2.2 Chrome/134.0.6998.178 Electron/35.1.2 Safari/537.36" version="26.2.2">
+  <diagram name="第 1 页" id="1-Z_3breW1nfrRBcPC3G">
+    <mxGraphModel dx="1927" dy="815" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="Qo8n-FjjrR0zkBeElpyf-1" target="Qo8n-FjjrR0zkBeElpyf-6">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="260" y="220" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="Qo8n-FjjrR0zkBeElpyf-1" target="Qo8n-FjjrR0zkBeElpyf-8">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="90" y="330" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-33" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="Qo8n-FjjrR0zkBeElpyf-1" target="Qo8n-FjjrR0zkBeElpyf-34">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="-60" y="220" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="-190" y="220" />
+              <mxPoint x="-190" y="180" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-35" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="Qo8n-FjjrR0zkBeElpyf-1" target="Qo8n-FjjrR0zkBeElpyf-36">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="-80" y="310" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="-190" y="220" />
+              <mxPoint x="-190" y="280" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-41" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="Qo8n-FjjrR0zkBeElpyf-1" target="Qo8n-FjjrR0zkBeElpyf-42">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="-80" y="320" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-1" value="主agent&lt;br&gt;main.py" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="30" y="190" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=1;exitDx=0;exitDy=0;exitPerimeter=0;" edge="1" parent="1" source="Qo8n-FjjrR0zkBeElpyf-2" target="Qo8n-FjjrR0zkBeElpyf-1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-2" value="userinput&lt;div&gt;&lt;br&gt;&lt;/div&gt;" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;outlineConnect=0;" vertex="1" parent="1">
+          <mxGeometry x="70" y="30" width="70" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="Qo8n-FjjrR0zkBeElpyf-6" target="Qo8n-FjjrR0zkBeElpyf-10">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="410" y="190" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="Qo8n-FjjrR0zkBeElpyf-6" target="Qo8n-FjjrR0zkBeElpyf-12">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="390" y="280" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-6" value="Bi&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;llagent&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="240" y="190" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-29" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="Qo8n-FjjrR0zkBeElpyf-8" target="Qo8n-FjjrR0zkBeElpyf-30">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="220" y="330" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-31" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="Qo8n-FjjrR0zkBeElpyf-8" target="Qo8n-FjjrR0zkBeElpyf-32">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="90" y="410" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-8" value="TravelAgent" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="30" y="300" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-17" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.978;exitY=0.617;exitDx=0;exitDy=0;exitPerimeter=0;" edge="1" parent="1" source="Qo8n-FjjrR0zkBeElpyf-20" target="Qo8n-FjjrR0zkBeElpyf-18">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="570" y="150" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-19" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="Qo8n-FjjrR0zkBeElpyf-10" target="Qo8n-FjjrR0zkBeElpyf-20">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="560" y="130" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-10" value="数据拉取和解压&lt;br&gt;月份分片存储" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="420" y="150" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="Qo8n-FjjrR0zkBeElpyf-12" target="Qo8n-FjjrR0zkBeElpyf-14">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="600" y="240" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-15" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="Qo8n-FjjrR0zkBeElpyf-12" target="Qo8n-FjjrR0zkBeElpyf-16">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="600" y="300" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-27" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.75;entryDx=0;entryDy=0;" edge="1" parent="1" target="Qo8n-FjjrR0zkBeElpyf-28">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="730" y="380" as="targetPoint" />
+            <mxPoint x="570" y="290" as="sourcePoint" />
+            <Array as="points">
+              <mxPoint x="570" y="400" />
+              <mxPoint x="600" y="400" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-12" value="数据查询&lt;div&gt;返回Dataframe数据&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="420" y="240" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-14" value="月份查询" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="600" y="210" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-16" value="时间范围查询" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="600" y="290" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-23" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="Qo8n-FjjrR0zkBeElpyf-18" target="Qo8n-FjjrR0zkBeElpyf-24">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="980" y="170" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-18" value="跟据配置的邮箱信息，跟据IMAP协议获取到数据压缩文件" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="790" y="140" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-20" value="指引用户进去微信手动选择邮箱方式导出数据，并获取到微信提供的解压密码" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="610" y="140" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-25" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="Qo8n-FjjrR0zkBeElpyf-24" target="Qo8n-FjjrR0zkBeElpyf-26">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1240" y="170" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-24" value="获取到数据文件后，用户提供刚才得到的解压密码，完成原始数据文件的提取。" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="950" y="140" width="190" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-26" value="然后将数据按月份分片存储" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="1180" y="140" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-28" value="其他的一系列小方法" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="600" y="370" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-30" value="百度API中提供的一系列方法" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="220" y="300" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-49" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="Qo8n-FjjrR0zkBeElpyf-32" target="Qo8n-FjjrR0zkBeElpyf-48">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-32" value="知识库比对操作" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="30" y="400" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-37" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="Qo8n-FjjrR0zkBeElpyf-34" target="Qo8n-FjjrR0zkBeElpyf-38">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="-477" y="150" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-34" value="历史会话持久化" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="-397" y="150" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-36" value="不用会话用户切换&lt;div&gt;thread_id&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="-397" y="250" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-39" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="Qo8n-FjjrR0zkBeElpyf-38" target="Qo8n-FjjrR0zkBeElpyf-40">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="-657" y="180" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-38" value="在程序启动初始化中，&lt;div&gt;就将checkpoints注入到初始化agent中去&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="-607" y="150" width="170" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-40" value="对应不同的用户将&lt;div&gt;历史存入到不同的db中去&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="-770" y="150" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-43" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="Qo8n-FjjrR0zkBeElpyf-42" target="Qo8n-FjjrR0zkBeElpyf-44">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="-100" y="375" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-42" value="知识库构建" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="-160" y="255" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-45" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="Qo8n-FjjrR0zkBeElpyf-44" target="Qo8n-FjjrR0zkBeElpyf-46">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="-100" y="470" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-44" value="导入数据，向量化到对应的数据库中" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="-160" y="345" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-51" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.75;exitDx=0;exitDy=0;" edge="1" parent="1" source="Qo8n-FjjrR0zkBeElpyf-46" target="Qo8n-FjjrR0zkBeElpyf-52">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="210" y="555" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="-10" y="555" />
+              <mxPoint x="-10" y="610" />
+              <mxPoint x="280" y="610" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-46" value="形成知识库" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="-160" y="510" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-50" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="Qo8n-FjjrR0zkBeElpyf-48" target="Qo8n-FjjrR0zkBeElpyf-46">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-53" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="Qo8n-FjjrR0zkBeElpyf-48" target="Qo8n-FjjrR0zkBeElpyf-52">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-48" value="将用户原数据经过关键词提取后连带着原始文段输入向量化，并带到向量知识库中进行比对打分" style="whiteSpace=wrap;html=1;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="10" y="490" width="160" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="Qo8n-FjjrR0zkBeElpyf-52" value="得到分数最高的结果" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="294" y="510" width="120" height="60" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

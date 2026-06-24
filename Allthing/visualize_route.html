@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>百度地图路线可视化</title>
+    <style>
+        body { margin: 0; padding: 20px; font-family: Arial, sans-serif; }
+        #map { width: 100%; height: 600px; border: 1px solid #ccc; }
+        .info { margin: 20px 0; padding: 15px; background: #f5f5f5; border-radius: 5px; }
+        .point-list { max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 12px; }
+    </style>
+    <script src="https://api.map.baidu.com/api?type=webgl&v=1.0&ak=ZnFT7hYeW2of3mDHL0foSVjNyLFVOoxL"></script>
+</head>
+<body>
+    <h2>百度地图路线可视化 - polyline_points 分析</h2>
+    
+    <div class="info">
+        <h3>路线信息</h3>
+        <p><strong>起点:</strong> 中山纪念图书馆 (113.396127, 22.523973)</p>
+        <p><strong>终点:</strong> 利和广场 (113.389668, 22.517390)</p>
+        <p><strong>坐标点数量:</strong> 30个</p>
+        <p><strong>路线距离:</strong> 约2.0公里</p>
+    </div>
+
+    <div id="map"></div>
+
+    <div class="info">
+        <h3>坐标点列表</h3>
+        <div class="point-list" id="pointList"></div>
+    </div>
+
+    <script>
+        // 起点和终点
+        var startPoint = [113.396127, 22.523973];
+        var endPoint = [113.389668, 22.517390];
+
+        // polyline_points 数据
+        var polylinePoints = [
+            [113.39620364416, 22.522917096221],
+            [113.39620364416, 22.522908750085],
+            [113.39620364416, 22.522750173398],
+            [113.39620364416, 22.52249978878],
+            [113.39616771194, 22.522274442231],
+            [113.39612279666, 22.522124210992],
+            [113.39605093222, 22.522132557177],
+            [113.39578144057, 22.52217428809],
+            [113.39579042363, 22.52217428809],
+            [113.39073296361, 22.522992211425],
+            [113.38997838698, 22.523326056277],
+            [113.38912499674, 22.523810129862],
+            [113.38832550484, 22.521723593548],
+            [113.38754397905, 22.519611986349],
+            [113.38694211436, 22.517108061997],
+            [113.38694211436, 22.517099715506],
+            [113.38696008047, 22.517191526882],
+            [113.38696906352, 22.517233259305],
+            [113.38700499574, 22.517391842396],
+            [113.38703194491, 22.517492000043],
+            [113.38707686018, 22.517683968662],
+            [113.38715770768, 22.517642236376],
+            [113.38738228406, 22.517625543459],
+            [113.38766075876, 22.517608850539],
+            [113.38794821653, 22.517608850539],
+            [113.38806499624, 22.517600504078],
+            [113.38872075926, 22.517600504078],
+            [113.38878364065, 22.517600504078],
+            [113.38936753923, 22.517592157617],
+            [113.38955618339, 22.517508692977],
+            [113.38968194616, 22.517475307107]
+        ];
+
+        // 显示坐标点列表
+        var pointListHtml = '<ol>';
+        polylinePoints.forEach(function(point, index) {
+            pointListHtml += '<li>[' + point[0].toFixed(6) + ', ' + point[1].toFixed(6) + ']</li>';
+        });
+        pointListHtml += '</ol>';
+        document.getElementById('pointList').innerHTML = pointListHtml;
+
+        // 初始化地图
+        var map = new BMapGL.Map('map');
+        var centerPoint = [
+            (startPoint[0] + endPoint[0]) / 2,
+            (startPoint[1] + endPoint[1]) / 2
+        ];
+        map.centerAndZoom(new BMapGL.Point(centerPoint[0], centerPoint[1]), 15);
+        map.enableScrollWheelZoom(true);
+
+        // 添加起点标记
+        var startMarker = new BMapGL.Marker(new BMapGL.Point(startPoint[0], startPoint[1]));
+        map.addOverlay(startMarker);
+        var startLabel = new BMapGL.Label('起点：中山纪念图书馆', {
+            position: new BMapGL.Point(startPoint[0], startPoint[1]),
+            offset: new BMapGL.Size(0, -30)
+        });
+        map.addOverlay(startLabel);
+
+        // 添加终点标记
+        var endMarker = new BMapGL.Marker(new BMapGL.Point(endPoint[0], endPoint[1]));
+        map.addOverlay(endMarker);
+        var endLabel = new BMapGL.Label('终点：利和广场', {
+            position: new BMapGL.Point(endPoint[0], endPoint[1]),
+            offset: new BMapGL.Size(0, -30)
+        });
+        map.addOverlay(endLabel);
+
+        // 绘制 polyline 路线
+        var polyline = new BMapGL.Polyline(
+            polylinePoints.map(function(p) { return new BMapGL.Point(p[0], p[1]); }),
+            {
+                strokeColor: '#FF0000',
+                strokeWeight: 4,
+                strokeOpacity: 0.8
+            }
+        );
+        map.addOverlay(polyline);
+
+        // 添加所有坐标点的小标记
+        polylinePoints.forEach(function(point, index) {
+            var circle = new BMapGL.Circle(
+                new BMapGL.Point(point[0], point[1]),
+                10,
+                {
+                    strokeColor: '#0000FF',
+                    strokeWeight: 2,
+                    fillColor: '#0000FF',
+                    fillOpacity: 0.5
+                }
+            );
+            map.addOverlay(circle);
+        });
+
+        console.log('路线分析完成！');
+        console.log('总坐标点数：' + polylinePoints.length);
+        console.log('起点到终点的直线距离约为：' + 
+            Math.sqrt(
+                Math.pow((startPoint[0] - endPoint[0]) * 111000, 2) + 
+                Math.pow((startPoint[1] - endPoint[1]) * 111000, 2)
+            ).toFixed(0) + ' 米');
+    </script>
+</body>
+</html>

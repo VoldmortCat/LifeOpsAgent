@@ -1,0 +1,6 @@
+# 用户个人配置（含邮箱密码等敏感信息，不提交）
+config/user_config.yml
+
+# Python
+__pycache__/
+*.pyc

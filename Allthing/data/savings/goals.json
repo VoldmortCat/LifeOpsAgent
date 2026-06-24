@@ -1,0 +1,33 @@
+{
+  "monthly_budget": 100.0,
+  "current_spending": 1500.0,
+  "days_remaining": 2,
+  "month": "202605",
+  "goals": [
+    {
+      "name": "撑到发工资",
+      "target": 300.0,
+      "saved": 0,
+      "created_at": "2026-05-27"
+    },
+    {
+      "name": "买Switch",
+      "target": 2000.0,
+      "saved": 0,
+      "created_at": "2026-05-27"
+    },
+    {
+      "name": "去日本旅行",
+      "target": 20000.0,
+      "saved": 500.0,
+      "created_at": "2026-06-01"
+    },
+    {
+      "name": "日常消费预算",
+      "target": 200.0,
+      "saved": 0,
+      "created_at": "2026-06-17"
+    }
+  ],
+  "updated_at": "2026-06-17T16:14:41.513067"
+}

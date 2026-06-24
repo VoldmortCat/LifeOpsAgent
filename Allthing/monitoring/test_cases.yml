@@ -1,0 +1,28 @@
+# RAG 评估测试用例
+# 格式：query + 期望的标签 + 最少结果数 + 最低置信度
+
+test_cases:
+  - query: "乳鸽哪家好吃"
+    expected_tags: ["乳鸽"]
+    min_results: 1
+    min_confidence: 0.3
+
+  - query: "深中通道怎么走"
+    expected_tags: ["翠亨新区", "交通出行"]
+    min_results: 1
+    min_confidence: 0.3
+
+  - query: "中山有什么温泉"
+    expected_tags: ["温泉"]
+    min_results: 1
+    min_confidence: 0.3
+
+  - query: "推荐石岐区的早茶"
+    expected_tags: ["早茶", "石岐区"]
+    min_results: 1
+    min_confidence: 0.3
+
+  - query: "孙中山故居在哪"
+    expected_tags: ["南朗", "孙中山故居"]
+    min_results: 1
+    min_confidence: 0.2

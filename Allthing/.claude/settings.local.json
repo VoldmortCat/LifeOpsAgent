@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p \"d:/ZZB/work/Agent/LifeOps Agent/Allthing/tools/savings\")",
+      "Bash(mkdir -p \"d:/ZZB/work/Agent/LifeOps Agent/Allthing/data/savings\")",
+      "Bash(python -c \"import sys; sys.path.insert\\(0,'.'\\); from tools.savings import set_savings_goal, update_saved_amount, get_financial_context; print\\('savings tools OK'\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(python -c \"import sys; sys.path.insert\\(0,'.'\\); from tools.savings.savings_tools import set_savings_goal, update_saved_amount, get_financial_context; r1 = set_savings_goal.invoke\\({'goal_name': 'BuySwitch', 'target_amount': 2000, 'monthly_budget': 3000, 'current_spending': 2500}\\); print\\(r1\\)\")",
+      "Bash(python -m py_compile graph/prompt_templates.py)",
+      "Bash(python -m py_compile graph/state.py)",
+      "Bash(python -m py_compile graph/cross_agent.py)",
+      "Bash(python -m py_compile graph/bill_node.py)",
+      "Bash(python -m py_compile graph/travel_node.py)",
+      "Bash(python -X utf8 test_final.py)",
+      "Bash(python -X utf8 test_robustness.py)",
+      "Bash(python -X utf8 test_4_queries.py)",
+      "Bash(python -X utf8 test_hybrid.py)",
+      "Bash(python -X utf8 -c ' *)",
+      "Bash(python -X utf8 test_e2e_new.py)",
+      "Bash(python -X utf8 test_q4_final.py)",
+      "Bash(python -X utf8 test_universal.py)",
+      "Bash(python -c \"from prompts.decision.bill_decision import BILL_DECISION_FRAMEWORK; from prompts.decision.travel_decision import TRAVEL_DECISION_FRAMEWORK; print\\('OK'\\)\")",
+      "Bash(python -X utf8 test_calculator.py)",
+      "Bash(python -X utf8 test_mislead.py)",
+      "Bash(python -X utf8 test_final_check.py)",
+      "Bash(python -X utf8 test_e2e_verify.py)"
+    ]
+  }
+}

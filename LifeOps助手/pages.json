@@ -1,0 +1,61 @@
+{
+	"pages": [
+		{
+			"path": "pages/index/index",
+			"style": {
+				"navigationBarTitleText": "",
+				"navigationStyle": "custom"
+			}
+		},
+		{
+			"path": "pages/bill/bill",
+			"style": {
+				"navigationBarTitleText": "账单中心"
+			}
+		},
+		{
+			"path": "pages/docs/docs",
+			"style": {
+				"navigationBarTitleText": "文档中心"
+			}
+		},
+		{
+			"path": "pages/mine/mine",
+			"style": {
+				"navigationBarTitleText": "个人中心"
+			}
+		}
+	],
+	"globalStyle": {
+		"navigationBarTextStyle": "black",
+		"navigationBarTitleText": "LifeOps助手",
+		"navigationBarBackgroundColor": "#F8F8F8",
+		"backgroundColor": "#F8F8F8"
+	},
+	"tabBar": {
+		"color": "#7A7E83",
+		"selectedColor": "#007AFF",
+		"backgroundColor": "#FFFFFF",
+		"borderStyle": "white",
+		"list": [
+			{
+				"pagePath": "pages/bill/bill",
+				"text": "账单中心",
+				"iconPath": "static/tab-bill.png",
+				"selectedIconPath": "static/tab-bill-active.png"
+			},
+			{
+				"pagePath": "pages/index/index",
+				"text": "智能管家",
+				"iconPath": "static/tab-chat.png",
+				"selectedIconPath": "static/tab-chat-active.png"
+			},
+			{
+				"pagePath": "pages/docs/docs",
+				"text": "文档中心",
+				"iconPath": "static/tab-mine.png",
+				"selectedIconPath": "static/tab-mine-active.png"
+			}
+		]
+	}
+}

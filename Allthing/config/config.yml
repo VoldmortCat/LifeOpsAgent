@@ -1,0 +1,107 @@
+# ============================================================
+# LifeOps Agent - 统一配置文件
+# 合并自：config.yml / config_email.yml / config_bill.yml / config_maps.yml
+# ============================================================
+
+base:
+  project_name: "LifeOps Agent"
+  version: "2.0.0"
+  debug: true
+
+# ---------- Agent 模型配置 ----------
+# 每个 Agent 的 LLM 参数独立配置，更换模型只需改这里的值
+agents:
+  main:
+    provider: "tongyi"           # 模型提供商（tongyi / openai / deepseek 等）
+    model: "qwen-plus"          # 模型名（免费额度最充裕）
+    temperature: 0.5             # 温度参数
+    streaming: false             # 是否流式
+    enable_thinking: false       # 关闭深度思考：账单明细数据量大，思考模式限 98304 token 会爆
+  bill:
+    provider: "tongyi"
+    model: "qwen-plus"
+    temperature: 0.3
+    streaming: false
+    enable_thinking: false       # 账单数据量大，关闭思考避免超限
+  travel:
+    provider: "tongyi"
+    model: "qwen-plus"
+    temperature: 0.7
+    streaming: false
+    enable_thinking: true        # 出行场景数据量小，可保留思考
+
+# ---------- 路径配置 ----------
+paths:
+  data_dir: "data"                # 持久化数据根目录
+  workspace_dir: "workspace"      # 临时工作区（下载/解压）
+  input_dir: "workspace/input"    # 账单压缩包下载目录
+  unzip_dir: "workspace/unzipped" # 账单解压目录
+  db_dir: "data/checkpoints"      # SQLite checkpointer 持久化
+  vectordb_dir: "data/vectordb"   # ChromaDB 向量库（RAG用）
+  knowledge_base_dir: "knowledge_base"  # Markdown 经验文档
+  docs_dir: "docs"                # 项目文档
+
+# ---------- 邮箱配置 ----------
+email:
+  imap_server: "imap.163.com"
+  username: "13714922737@163.com"
+  password: "BLpzxsMCdygCTsak"
+  watch_folder: "INBOX"
+
+# ---------- 账单模块配置 ----------
+bill:
+  skip_header_rows: 17
+  columns:
+    trade_time: "交易时间"
+    trade_type: "交易类型"
+    trade_opposite: "交易对方"
+    commodity: "商品"
+    income_outcome: "收/支"
+    amount: "金额(元)"
+    pay_method: "支付方式"
+    status: "当前状态"
+    trade_id: "交易单号"
+    merchant_id: "商户单号"
+    note: "备注"
+    trade_date: "交易日期"
+    trade_month: "交易月份"
+  values:
+    income: "收入"
+    outcome: "支出"
+    neutral: "/"
+  output:
+    folder: "data/bills"              # 账单 CSV 输出目录
+    chart_folder: "data/bills/charts" # 图表输出目录
+    required_fields:
+      - "交易时间"
+      - "交易类型"
+      - "交易对方"
+      - "商品"
+      - "收/支"
+      - "金额(元)"
+      - "支付方式"
+      - "当前状态"
+      - "交易单号"
+      - "商户单号"
+      - "备注"
+      - "交易日期"
+      - "交易月份"
+
+# ---------- 地图/出行模块配置 ----------
+maps:
+  provider: "baidu"
+  api_key_env: "BAIDU_MAPS_API_KEY"
+  default_city: "中山"
+
+# ---------- Graph 引擎配置（V3.0 新增） ----------
+graph:
+  engine: "graph"                    # "legacy" | "graph" — 默认引擎
+  recursion_limit: 25                # 子 Agent 工具调用最大递归深度
+  enable_cross_agent: true           # P2: 跨 Agent 通信开关（联调已开启）
+
+# ---------- 监控配置（V3.0 新增） ----------
+monitoring:
+  enabled: true                      # P3: RAG 监控总开关
+  log_dir: "data/monitoring"         # 日志/报告输出目录
+  buffer_size: 500                   # 内存缓冲区大小（条）
+  dashboard_window: 100              # 仪表盘统计窗口（最近 N 条）
