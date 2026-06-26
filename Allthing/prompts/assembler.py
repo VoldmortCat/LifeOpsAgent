@@ -34,10 +34,14 @@ from .failure.travel_failure import TRAVEL_FAILURE_STRATEGIES
 
 
 def _financial_context_from_state(state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """从 state 中提取财务上下文。"""
+    """从 state 中提取财务上下文。
+
+    至少包含以下之一才视为有效：monthly_budget / daily_baseline
+    """
     fc = state.get("financial_context")
-    if fc and isinstance(fc, dict) and fc.get("monthly_budget", 0) > 0:
-        return fc
+    if fc and isinstance(fc, dict):
+        if fc.get("monthly_budget", 0) > 0 or fc.get("daily_baseline", 0) > 0:
+            return fc
     return None
 
 
@@ -149,25 +153,41 @@ def assemble_travel_prompt(state: Dict[str, Any]) -> str:
         remaining = fc.get("remaining_budget", 0)
         monthly = fc.get("monthly_budget", 0)
         current = fc.get("current_spending", 0)
+        daily_baseline = fc.get("daily_baseline", 0)
 
-        days_left = max(date.today().day, 1)
-        daily = remaining / max(days_left, 1) if remaining > 0 else 0
+        # 仅有 daily_baseline（没有月度预算数据）→ 注入简化预算块
+        if daily_baseline > 0 and monthly <= 0:
+            blocks.append(
+                f"【💰 用户真实财务数据（已获取，禁止重复调财务工具）】\n"
+                f"- 日常小额消费基线：{daily_baseline} 元/天（吃饭通勤等必需开销）\n"
+                f"\n"
+                f"🔴 推荐规则（严格遵守）：\n"
+                f"1. 用户说\"X块撑Y天\" = 总共只有 X 元要过 Y 天，日常必需 ≈ {daily_baseline}×Y 元\n"
+                f"   剩余可支配 = X - 日常必需，这是用户吃这一顿饭的上限\n"
+                f"2. 用户只想吃「一顿」，推荐 1 家店即可，人均价格 ≤ 剩余可支配\n"
+                f"3. 如果剩余可支配 ≤ 0 → 告诉用户预算不够，推荐最便宜的店，不要硬推\n"
+                f"4. 绝对禁止把人均价格 × 天数来算总价——用户只吃一顿，不是天天吃\n"
+                f"5. 回复只说推荐哪家店、人均多少、为什么适合预算。不要列公式、不要算\"余下XX元\""
+            )
+        elif monthly > 0:
+            days_left = max(date.today().day, 1)
+            daily = remaining / max(days_left, 1) if remaining > 0 else 0
 
-        if remaining > 1000:
-            blocks.append(TRAVEL_BUDGET_HEALTHY.format(
-                monthly_budget=monthly, current_spending=current,
-                remaining_budget=remaining,
-            ))
-        elif remaining > 0:
-            blocks.append(TRAVEL_BUDGET_TIGHT.format(
-                monthly_budget=monthly, current_spending=current,
-                remaining_budget=remaining, daily_budget=f"{daily:.0f}",
-            ))
-        else:
-            blocks.append(TRAVEL_BUDGET_CRITICAL.format(
-                monthly_budget=monthly, current_spending=current,
-                remaining_budget=remaining, daily_budget=f"{daily:.0f}",
-            ))
+            if remaining > 1000:
+                blocks.append(TRAVEL_BUDGET_HEALTHY.format(
+                    monthly_budget=monthly, current_spending=current,
+                    remaining_budget=remaining,
+                ))
+            elif remaining > 0:
+                blocks.append(TRAVEL_BUDGET_TIGHT.format(
+                    monthly_budget=monthly, current_spending=current,
+                    remaining_budget=remaining, daily_budget=f"{daily:.0f}",
+                ))
+            else:
+                blocks.append(TRAVEL_BUDGET_CRITICAL.format(
+                    monthly_budget=monthly, current_spending=current,
+                    remaining_budget=remaining, daily_budget=f"{daily:.0f}",
+                ))
 
     # 失败策略层始终加载
     blocks.append(TRAVEL_FAILURE_STRATEGIES)

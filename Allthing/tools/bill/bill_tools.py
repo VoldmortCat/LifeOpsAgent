@@ -384,13 +384,19 @@ def get_date_range_bill_data(
 # ============================================================
 
 
-def _find_most_recent_complete_month() -> str:
-    """找到距离当前时间最近的、本地有数据的完整月份。
+def _find_most_recent_complete_month(min_days: int = 7) -> str:
+    """找到距离当前时间最近、且数据质量满足日常开销计算要求的月份。
 
-    规则：
-    - 完整月份 = 已过去的月份（当前月不算，因为数据不完整）
-    - 遍历 data/bills/ 下所有 YYYYMM.csv，取最大的 month <= 上个月
-    - 如果没有任何完整月数据，返回上个月（兜底，让上层报错处理）
+    规则（按优先级）：
+    1. 排除当前月（数据不完整）
+    2. 从最近月份往前遍历，读取每个 CSV 的实际交易天数
+    3. 返回第一个满足「交易天数 ≥ min_days」的月份
+    4. 如果所有月份都不够 min_days → 返回实际天数最多的那个月（兜底）
+
+    为什么需要这个检查：
+    - 某个月 CSV 文件存在，但可能只有几天数据（如月初刚导入）
+    - 用只有 1 天数据的月份算日均 → 结果毫无意义
+    - 这个函数确保 baseline 计算始终基于数据充足的月份
 
     Returns:
         YYYYMM 格式的月份字符串，如 "202605"
@@ -407,28 +413,66 @@ def _find_most_recent_complete_month() -> str:
     if not os.path.exists(DATA_DIR):
         return last_complete_ym
 
-    available_months = []
+    # 收集所有 past 月份的文件
+    month_files = []
     for filename in os.listdir(DATA_DIR):
         if filename.endswith(".csv") and re.match(r"^\d{6}\.csv$", filename):
             month = filename[:6]
             if month <= last_complete_ym:
-                available_months.append(month)
+                month_files.append(month)
 
-    if not available_months:
+    if not month_files:
         return last_complete_ym
 
-    available_months.sort(reverse=True)
-    return available_months[0]
+    # 从最近到最远排序
+    month_files.sort(reverse=True)
+
+    # 逐个检查实际交易天数，找第一个满足门槛的
+    best_month = None
+    best_days = 0
+
+    for month in month_files:
+        file_path = os.path.join(DATA_DIR, f"{month}.csv")
+        try:
+            df = pd.read_csv(file_path, encoding="utf-8-sig")
+            if df.empty:
+                continue
+
+            # 用"交易日期"列计算实际有多少天有记录
+            if "交易日期" in df.columns:
+                date_series = pd.to_datetime(df["交易日期"], errors="coerce")
+                unique_days = date_series.dropna().nunique()
+            elif "交易时间" in df.columns:
+                date_series = pd.to_datetime(df["交易时间"], errors="coerce").dt.date
+                unique_days = date_series.dropna().nunique()
+            else:
+                unique_days = 0
+
+            # 记录实际天数最多的月份（兜底用）
+            if unique_days > best_days:
+                best_days = unique_days
+                best_month = month
+
+            # 满足门槛 → 直接返回
+            if unique_days >= min_days:
+                return month
+
+        except Exception:
+            continue
+
+    # 兜底：所有月份都不够门槛 → 返回实际天数最多的那个
+    return best_month or month_files[0]
 
 
 @tool
 def get_daily_spending_baseline() -> str:
     """
-    【预算计算专用】获取用户日常开销基线——以最近完整月中 ≤25 元的日常小额消费为准。
+    【预算计算专用】获取用户日常开销基线——以数据充足的最近完整月中 ≤25 元的日常小额消费为准。
 
     业务逻辑（内部自动完成）：
-    1. 自动扫描 data/bills/ 找到最近一个完整月份（当前月不算）
-    2. 读取该月全部账单数据
+    1. 自动扫描 data/bills/，从最近月份往前找，**跳过交易天数 < 7 天的月份**
+       （比如当月刚导入只有几天数据 → 自动跳过，用上个月完整数据）
+    2. 读取选中的月份全部账单数据
     3. **只保留金额 ≤ 25 元的记录**（过滤掉房租、大额购物等非日常消费）
     4. 计算日均支出 = 筛选后总支出 ÷ 交易天数
     5. 返回结构化的基线数据
@@ -437,7 +481,6 @@ def get_daily_spending_baseline() -> str:
     - 日常吃饭、通勤等必需开销，单笔一般不超过 25 元
     - 房租、买手机、高铁票等大额支出会被自动排除
     - 这样算出的日均才能真正反映「日常吃饭通勤」的消费水平
-    - 上级 Agent 做预算计算时不会因为异常月份而过于悲观
 
     Returns:
         JSON 字符串，包含：
@@ -448,7 +491,7 @@ def get_daily_spending_baseline() -> str:
         - days_count: 交易天数
         - daily_baseline: 日常开销基线（筛选后日均）
         - excluded_total: 被排除的大额支出总额
-        - note: 说明信息
+        - note: 说明信息（含数据质量说明，如是否跳过了不完整月份）
     """
     # Step 1: 找最近完整月
     target_month = _find_most_recent_complete_month()

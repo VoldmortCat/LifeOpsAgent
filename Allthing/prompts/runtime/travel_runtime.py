@@ -25,7 +25,7 @@ TRAVEL_BUDGET_HEALTHY = """
 【💰 预算状态：充足（账单管家已提供真实数据，无需再调财务工具）】
 月预算={monthly_budget}元, 已支出={current_spending}元, 剩余={remaining_budget}元。
 剩余预算充足，按正常标准推荐即可。不需要在回复中特别提及财务状况。
-⚠️ 财务数据已由主 Agent 从账单管家获取并注入，**禁止重复调用 get_financial_context() 和 query_bill_budget()**。
+⚠️ 财务数据已由主 Agent 从账单管家获取并注入，**禁止重复调用 get_financial_context()**。
 """
 
 # ---- 预算感知：需关注 ----
@@ -33,7 +33,7 @@ TRAVEL_BUDGET_TIGHT = """
 【💡 预算状态：需关注（账单管家已提供真实数据，无需再调财务工具）】
 月预算={monthly_budget}元, 已支出={current_spending}元, 剩余={remaining_budget}元, 日均≈{daily_budget}元。
 用户可能提了预算相关话题。推荐时注意人均消费是否合理，但**用自然语言融入推荐中**，不要单独列一段"财务提醒"。像朋友聊天一样说就行，比如"这家35元挺划算的"。
-⚠️ 财务数据已由主 Agent 从账单管家获取并注入，**禁止重复调用 get_financial_context() 和 query_bill_budget()**。
+⚠️ 财务数据已由主 Agent 从账单管家获取并注入，**禁止重复调用 get_financial_context()**。
 """
 
 # ---- 预算感知：危急 ----
@@ -41,5 +41,5 @@ TRAVEL_BUDGET_CRITICAL = """
 【🚨 预算状态：紧张（账单管家已提供真实数据，无需再调财务工具）】
 月预算={monthly_budget}元, 已支出={current_spending}元, 剩余={remaining_budget}元, 日均≈{daily_budget}元。
 推荐时优先选便宜的选项，自然地提醒一下就好（"手头紧的话这家比较合适"），不要用模板化的警示段落。
-⚠️ 财务数据已由主 Agent 从账单管家获取并注入，**禁止重复调用 get_financial_context() 和 query_bill_budget()**。
+⚠️ 财务数据已由主 Agent 从账单管家获取并注入，**禁止重复调用 get_financial_context()**。
 """

@@ -29,12 +29,8 @@ from prompts.assembler import assemble_travel_prompt
 from .tool_tracer import TracedToolNode, dump_reasoning
 
 
-def _build_travel_tools(allow_cross_agent: bool = True) -> list:
-    """动态构建 Travel Agent 工具列表：优先使用 MCP 百度地图工具，失败时 fallback 到 @tool。
-
-    百度地图 6 工具 → MCP Server（mcp-server-baidu-maps，独立进程）
-    其他工具 → 直接 @tool 函数
-    """
+def _build_travel_tools() -> list:
+    """动态构建 Travel Agent 工具列表：优先使用 MCP 百度地图工具，失败时 fallback 到 @tool。"""
     from tools.maps.baidu_maps_mcp import get_baidu_mcp_tools
 
     mcp_baidu = get_baidu_mcp_tools()
@@ -45,9 +41,6 @@ def _build_travel_tools(allow_cross_agent: bool = True) -> list:
         get_financial_context,
         set_savings_goal,
     ]
-    if allow_cross_agent:
-        from .cross_agent import query_bill_budget
-        non_baidu.append(query_bill_budget)
 
     if mcp_baidu:
         return list(mcp_baidu) + non_baidu
@@ -267,7 +260,7 @@ def _extract_map_data(messages: list) -> Optional[Dict[str, Any]]:
     for msg in messages:
         if isinstance(msg, HumanMessage):
             content = msg.content or ""
-            if any(kw in content for kw in ('路线', '规划路线', '怎么去', '导航')):
+            if any(kw in content for kw in ('路线', '路线图', '规划路线', '怎么去', '导航')):
                 user_asks_route = True
                 # 根据关键词判断出行方式
                 if any(kw in content for kw in ('步行', '走路', '走过去', '走路去')):
@@ -372,7 +365,7 @@ def _extract_map_data(messages: list) -> Optional[Dict[str, Any]]:
         # 保存 POI 数据供 fallback 路线使用，不要提前 return
         _poi_map_data_for_route = map_data
 
-    # 没有任何地图数据
+    # 如果没有POI数据且用户不要路线 → 无地图数据
     if not _poi_map_data_for_route and not geocode_messages:
         if not user_asks_route:
             print("\n[DEBUG]   无地图数据可提取")
@@ -380,17 +373,27 @@ def _extract_map_data(messages: list) -> Optional[Dict[str, Any]]:
         print("\n[DEBUG]   用户要路线但无地图数据")
         return None
 
-    # 用户没要路线 → 直接返回 POI 列表
-    if not user_asks_route:
-        return _poi_map_data_for_route
-
-    # ---- 后端自动补路线 ----
-
+    # 提取最终回复文本（用于过滤 POI）
     final_reply = ""
     for msg in reversed(messages):
         if isinstance(msg, AIMessage) and msg.content:
             final_reply = msg.content
             break
+
+    # 用户没要路线 → 返回 POI 列表（过滤到回复中提及的店）
+    if not user_asks_route:
+        if _poi_map_data_for_route:
+            return _filter_poi_to_mentioned(_poi_map_data_for_route, final_reply)
+        return None
+
+    # ---- 后端自动补路线 ----
+
+    # 如果 final_reply 还没提取（理论上已在上面提取了），再兜底一次
+    if not final_reply:
+        for msg in reversed(messages):
+            if isinstance(msg, AIMessage) and msg.content:
+                final_reply = msg.content
+                break
 
     # 情况A：有 ≥2 个 geocode → 起点→终点多模式路线
     if user_asks_route and len(geocode_messages) >= 2:
@@ -879,21 +882,11 @@ def run_travel_agent(
     query: str,
     financial_context: Optional[Dict[str, Any]] = None,
     data_status: str = "normal",
-    allow_cross_agent: bool = True,
 ) -> str:
-    """运行 Travel Agent 子图，返回最终的文本回复。
-
-    参数：
-    - query: 用户查询文本（旅行/美食/出行相关）
-    - financial_context: 可选的用户财务快照（由主 Agent 传入）
-    - data_status: 主 Agent 的数据可用状态
-    - allow_cross_agent: 是否允许调用 cross_agent 工具（query_bill_budget）
-
-    返回：Travel Agent 整理后的文本回复
-    """
+    """运行 Travel Agent 子图，返回最终的文本回复。"""
     global _last_travel_map_data
 
-    tools = _build_travel_tools(allow_cross_agent)
+    tools = _build_travel_tools()
     subgraph = _build_reAct_graph(tools)
     initial_state = {
         "messages": [HumanMessage(content=query)],

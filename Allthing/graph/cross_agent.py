@@ -1,10 +1,7 @@
-"""P2: 跨 Agent 通信工具。
+"""主 Agent 调用子 Agent 的工具函数。
 
-架构原则（主 Agent 持有历史，子 Agent 作为工具被调用）：
-  - query_bill_agent：主 Agent 调用，查询账单数据。子 Agent 沙箱内独立 ReAct。
-  - query_travel_agent：主 Agent 调用，查询出行美食。子 Agent 沙箱内独立 ReAct。
-  - query_bill_budget / query_travel_savings：子 Agent 内部互相调用（保留兼容）。
-  - 子 Agent 作为子工具调用时（allow_cross_agent=False），禁用自身的跨 Agent 工具，防止递归。
+  - query_bill_agent：主 Agent 调用，子 Agent 沙箱内独立 ReAct
+  - query_travel_agent：主 Agent 调用，子 Agent 沙箱内独立 ReAct
 """
 
 from langchain_core.tools import tool
@@ -66,7 +63,7 @@ def query_bill_agent(query: str, financial_context: str = "") -> str:
             parsed = _json.loads(financial_context)
             if parsed:
                 fc = {}
-                for k in ("balance", "monthly_budget", "current_spending", "upcoming_income"):
+                for k in ("balance", "monthly_budget", "current_spending", "upcoming_income", "daily_baseline"):
                     if k in parsed:
                         fc[k] = parsed[k]
         except (_json.JSONDecodeError, ValueError):
@@ -77,7 +74,6 @@ def query_bill_agent(query: str, financial_context: str = "") -> str:
         query=query,
         financial_context=fc,
         data_status="normal",
-        allow_cross_agent=True,
     )
 
 
@@ -117,7 +113,7 @@ def query_travel_agent(query: str, financial_context: str = "") -> str:
             parsed = _json.loads(financial_context)
             if parsed:
                 fc = {}
-                for k in ("balance", "monthly_budget", "current_spending", "upcoming_income"):
+                for k in ("balance", "monthly_budget", "current_spending", "upcoming_income", "daily_baseline"):
                     if k in parsed:
                         fc[k] = parsed[k]
         except (_json.JSONDecodeError, ValueError):
@@ -143,82 +139,4 @@ def query_travel_agent(query: str, financial_context: str = "") -> str:
         query=query,
         financial_context=fc,
         data_status="normal",
-        allow_cross_agent=True,
-    )
-
-
-# ============================================================
-# 子 Agent 内部互调工具（保留兼容）
-# ============================================================
-
-
-@tool
-def query_bill_budget(month: str = "") -> str:
-    """
-    【跨Agent调用】查询账单Agent获取月度收支预算和消费分析。
-    当你需要根据用户预算调整推荐策略、或需要详细的消费数据分析时使用此工具。
-
-    Args:
-        month: 账单月份，YYYYMM格式，如"202605"。留空则查当月。
-    """
-    # 延迟导入，避免循环依赖
-    from .bill_node import run_bill_agent
-
-    month_label = f"{month}月" if month else "当月"
-    query = (
-        f"请查询{month_label}的账单数据，分析以下内容：\n"
-        f"1. 🔴 优先调用 get_daily_spending_baseline() 获取日常开销基线（只统计 ≤25 元的日常小额消费），\n"
-        f"   引用其中的 daily_baseline 作为预算计算的日均基准\n"
-        f"2. 月度总支出和总收入\n"
-        f"3. 餐饮类目支出及占比\n"
-        f"4. 消费趋势和习惯特征\n"
-        f"5. 剩余预算和日均可用金额（结合财务上下文）\n"
-        f"\n⚠️ 关键：日常开销基线（第1项）是上级 Agent 做预算计算的核心依据，\n"
-        f"必须使用 get_daily_spending_baseline() 返回的 daily_baseline 值。"
-    )
-    return run_bill_agent(
-        query=query,
-        financial_context=None,
-        data_status="normal",
-        cross_agent_request={
-            "target_agent": "bill_agent",
-            "query": query,
-            "reason": "行程助手需要财务数据来调整推荐策略",
-            "context_summary": "行程助手需要你的月度预算和消费模式数据",
-        },
-        allow_cross_agent=False,  # 沙箱模式：禁止 BillAgent 再回调 TravelAgent
-    )
-
-
-@tool
-def query_travel_savings(preferences: str = "省钱美食", count: int = 3) -> str:
-    """
-    【跨Agent调用】查询行程Agent获取省钱美食/免费活动推荐。
-    当用户账单显示消费偏高，你想要推荐省钱方案时使用。
-
-    Args:
-        preferences: 偏好风格，如"省钱美食"/"免费活动"/"性价比高"
-        count: 期望返回的推荐数量，默认3
-    """
-    # 延迟导入，避免循环依赖
-    from .travel_node import run_travel_agent
-
-    query = (
-        f"请推荐{count}个{preferences}方案，要求：\n"
-        f"1. 标注人均消费金额\n"
-        f"2. 优先推荐人均低、口碑好的店铺\n"
-        f"3. 包含免费景点/公园/步行路线等零成本活动\n"
-        f"4. 推荐适合预算有限的用户的选择"
-    )
-    return run_travel_agent(
-        query=query,
-        financial_context=None,
-        data_status="normal",
-        cross_agent_request={
-            "target_agent": "travel_agent",
-            "query": query,
-            "reason": "账单管家发现用户可能需要节省开支",
-            "context_summary": "账单管家需要你提供省钱方案来帮助用户控制支出",
-        },
-        allow_cross_agent=False,  # 沙箱模式：禁止 TravelAgent 再回调 BillAgent
     )

@@ -4,8 +4,6 @@
   - run_bill_agent(query, ...) 是唯一对外接口，每次调用都在沙箱内独立执行 ReAct 循环
   - 不共享、不污染主 Agent 的消息历史
   - 调用方传入 query + context，拿回最终文本结果
-  - 跨 Agent 工具（query_travel_savings）仅在直接用户对话模式下可用，
-    被其他 Agent 作为子工具调用时禁用，防止递归
 """
 
 from langgraph.graph import StateGraph, END
@@ -27,28 +25,12 @@ from tools.bill import (
 from tools.time import get_current_time
 from tools.savings import set_savings_goal, update_saved_amount, get_financial_context
 from tools.common.calculator_tools import calculate
-from .cross_agent import query_travel_savings
 from prompts.assembler import assemble_bill_prompt
 
 logger = logging.getLogger("lifeops.bill")
 
 # ---- 工具列表 ----
-# 完整模式（直接用户对话）：包含跨 Agent 工具
-BILL_TOOLS_FULL = [
-    check_and_download_bill_email,
-    unzip_latest_wechat_bill,
-    get_date_range_bill_data,
-    get_data_inventory,
-    get_daily_spending_baseline,
-    get_current_time,
-    set_savings_goal,
-    update_saved_amount,
-    get_financial_context,
-    query_travel_savings,
-]
-
-# 沙箱模式（被其他 Agent 作为子工具调用）：不含跨 Agent 工具，防止递归
-BILL_TOOLS_SANDBOX = [
+BILL_TOOLS = [
     check_and_download_bill_email,
     unzip_latest_wechat_bill,
     get_date_range_bill_data,
@@ -89,25 +71,19 @@ def run_bill_agent(
     financial_context: Optional[Dict[str, Any]] = None,
     data_status: str = "normal",
     cross_agent_request: Optional[Dict[str, Any]] = None,
-    allow_cross_agent: bool = True,
 ) -> str:
     """在沙箱中运行 BillAgent 的 ReAct 循环，返回最终文本回复。
-
-    Agent 内部的所有工具调用、中间推理过程对外部完全不可见。
-    外部只看到：传入 query → 返回结果文本。
 
     Args:
         query: 用户查询或上游 Agent 的请求文本
         financial_context: 财务上下文（预算/支出/省钱目标等）
-        data_status: 数据状态标识（"normal"/"degraded"/"no_data"），作为降级策略激活开关
-        cross_agent_request: 跨 Agent 请求上下文
-        allow_cross_agent: 是否允许调用跨 Agent 工具（被其他 Agent 调用时设为 False）
+        data_status: 数据状态标识（"normal"/"degraded"/"no_data"）
+        cross_agent_request: 跨 Agent 请求上下文（保留兼容）
 
     Returns:
         BillAgent 的最终文本回复
     """
-    tools = BILL_TOOLS_FULL if allow_cross_agent else BILL_TOOLS_SANDBOX
-    subgraph = _build_reAct_graph(tools)
+    subgraph = _build_reAct_graph(BILL_TOOLS)
     initial_state = {
         "messages": [HumanMessage(content=query)],
         "data_status": data_status,

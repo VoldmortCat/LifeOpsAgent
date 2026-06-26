@@ -5,11 +5,11 @@ Subagents 架构：
   - 子 Agent（Bill / Travel）作为主 Agent 的工具被调用
   - 主 Agent 自主判断何时调用哪个子工具，拿到数据后合成最终回复
   - 子 Agent 的内部 ReAct 循环不写入主 Agent 的消息历史
-  - 跨 Agent 互调（query_bill_budget / query_travel_savings）由子 Agent 内部工具完成
-
-V2.0 改进：
-  - 路由前进行确定性数字提取（不依赖 LLM），提高 financial_context 传递可靠性
-  - 使用增强版路由/合成提示词，强制任务拆解和精确 query 构造
+V3.0 改进（2026-06）：
+  - 拆掉路由/合成两阶段分叉，主 Agent 每轮全工具可用
+  - 统一提示词，LLM 逐步推进——每次只调一个工具，看到结果再决定下一步
+  - 实现真正的「感知→行动→再感知→再行动」闭环
+  - 保留：正则聚光灯、城市上下文注入、消息截断、工具调用追踪
 """
 
 from langgraph.graph import StateGraph, END, START
@@ -22,30 +22,14 @@ from .cross_agent import query_bill_agent, query_travel_agent
 from tools.time import get_current_time
 from tools.common.calculator_tools import calculate
 from routing.task_decomposer import (
-    ROUTING_PROMPT_V2,
-    SYNTHESIS_PROMPT_V2,
+    MAIN_AGENT_PROMPT_V3,
     scan_number_context,
     build_financial_context_json,
-)
-from prompts.decision.calculation import (
-    CALCULATION_EXPRESSION_PROMPT,
-    CALCULATION_BAN,
-    SYNTHESIS_CALCULATION_GUIDE,
 )
 
 logger = logging.getLogger("lifeops.main")
 
 MAIN_AGENT_TOOLS = [query_bill_agent, query_travel_agent, get_current_time, calculate]
-
-# 在路由提示词末尾追加计算器规则
-ROUTING_PROMPT = ROUTING_PROMPT_V2 + "\n" + CALCULATION_EXPRESSION_PROMPT
-
-# 在合成提示词末尾追加计算引导 + 禁令
-SYNTHESIS_PROMPT = SYNTHESIS_PROMPT_V2 + "\n" + CALCULATION_BAN + "\n" + SYNTHESIS_CALCULATION_GUIDE
-
-# 使用增强版提示词（从 routing/task_decomposer.py 加载）
-ROUTING_PROMPT = ROUTING_PROMPT_V2
-SYNTHESIS_PROMPT = SYNTHESIS_PROMPT_V2
 
 from langchain_core.language_models import BaseChatModel
 from llm.llm_registry import get_main_llm
@@ -81,65 +65,6 @@ def _get_main_llm() -> BaseChatModel:
     if _main_llm is None:
         _main_llm = get_main_llm()
     return _main_llm
-
-
-def _build_previous_turn_summary(messages: list, current_human_idx: int) -> str:
-    """从历史消息中提取上一轮对话的数据摘要。
-
-    给路由 LLM 一个「上一轮发生了什么事」的简短上下文，
-    帮助判断当前请求是需要重新调工具还是可以用已有数据。
-
-    只提取当前用户消息之前的最近一轮有效交互。
-    """
-    # 找到上一个 HumanMessage（如果存在）
-    prev_human_idx = -1
-    for i in range(current_human_idx - 1, -1, -1):
-        if isinstance(messages[i], HumanMessage):
-            prev_human_idx = i
-            break
-
-    if prev_human_idx < 0:
-        return ""  # 第一轮对话，无历史
-
-    # 收集上一轮 Human 之后的 ToolMessage 信息
-    tool_calls_made = []
-    data_granularity = "无数据"
-
-    for i in range(prev_human_idx + 1, current_human_idx):
-        msg = messages[i]
-        if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls") and msg.tool_calls:
-            for tc in msg.tool_calls:
-                name = tc.get("name", "?")
-                args = tc.get("args", {})
-                tool_calls_made.append(f"{name}({str(args)[:80]})")
-
-        if isinstance(msg, ToolMessage):
-            content = str(msg.content or "")[:300]
-            name = getattr(msg, "name", "")
-            # 判断数据粒度
-            if name == "get_date_range_bill_data":
-                if '"data"' in content or '逐条' in content or '交易记录' in content:
-                    # 检查是否有 __stats__ vs 完整 data 数组
-                    if '__stats__' in content and '"data"' not in content:
-                        data_granularity = "摘要（预计算统计，非逐条明细）"
-                    else:
-                        data_granularity = "逐条明细"
-                else:
-                    data_granularity = "汇总统计"
-
-    if not tool_calls_made:
-        return ""
-
-    prev_user_msg = messages[prev_human_idx].content[:100] if prev_human_idx >= 0 else "?"
-
-    lines = [
-        "【📋 上一轮对话摘要 — 仅用于判断是否需要重新调工具】",
-        f"上一轮用户问: {prev_user_msg}",
-        f"上一轮调用过的工具: {', '.join(tool_calls_made[:5])}",
-        f"上一轮拿到的数据粒度: {data_granularity}",
-        "⚠️ 如果当前用户要求逐条明细/每笔交易列出，但上一轮只拿到了摘要 → 必须重新调工具！",
-    ]
-    return "\n".join(lines)
 
 
 def _sanitize_messages_for_api(messages: list) -> list:
@@ -196,18 +121,22 @@ def build_lifeops_graph(checkpointer=None):
     """构建 Subagents 模式的 LifeOps StateGraph。
 
     流程：
-      START → main_agent → 路由阶段（纯代码）→ tools → main_agent → 合成阶段（LLM）→ END
+      START → main_agent（全工具，每轮自己判断继续还是结束）⇄ tools → END
+
+    V3 改动：拆掉路由/合成两阶段分叉，主 Agent 每轮都拥有全部工具，
+    LLM 自己根据 Prompt 指引逐步推进——每次只调一个工具，看到结果再决定下一步。
     """
     builder = StateGraph(AgentState)
 
     def main_agent_node(state: AgentState) -> dict:
-        """路由阶段：LLM 决策（隔离历史 + 注入预提取数字）→ 合成阶段：LLM 整理回复（当前轮）"""
+        """统一节点：每轮 LLM 拥有全部工具，自己判断是继续调工具还是回复用户。"""
         messages = list(state["messages"])
 
         # 🔴 全局截断：只保留最近 10 条消息，防止 checkpoint 历史无限膨胀
         if len(messages) > 10:
             messages = messages[-10:]
 
+        # 找到最后一条用户消息
         last_human_idx = -1
         for i, msg in enumerate(messages):
             if isinstance(msg, HumanMessage):
@@ -215,123 +144,68 @@ def build_lifeops_graph(checkpointer=None):
 
         user_msg = messages[last_human_idx].content if last_human_idx >= 0 else ""
 
+        # 判断当前是本轮对话的第一次调用（用户刚发消息）还是后续循环
         has_tool_results = any(
             isinstance(m, ToolMessage) for m in messages[last_human_idx + 1:]
         )
 
         llm = _get_main_llm()
 
+        # ---- 构造消息列表 ----
+        # 用当前消息替换最后一条 HumanMessage（首次调用时注入正则聚光灯结果）
+        enhanced_msg = user_msg
+        has_finance = _has_financial_intent(user_msg)
+
         if not has_tool_results:
-            # ===== 路由阶段：正则聚光灯扫描 + 历史摘要注入 + LLM 路由 =====
-            # 1. 正则扫描：按句号切含数字的句子 + 阿拉伯数字对照表（不做语义判断）
+            # 首次调用：注入正则聚光灯扫描结果，帮 LLM 聚焦含数字的句子
             scan = scan_number_context(user_msg)
             fragments = scan.get("fragments", [])
             number_table = scan.get("number_table", [])
 
-            # 2. 构造路由上下文：SystemPrompt + 最近几轮真实消息（非摘要压缩）
-            #    路由阶段 LLM 绑定工具只输出 tool_calls，不会产生模板污染
-            prev_human_idx = last_human_idx
-            for i in range(last_human_idx - 1, -1, -1):
-                if isinstance(messages[i], HumanMessage):
-                    prev_human_idx = i
-                    break
-            # 取上一轮 HumanMessage 到当前轮 HumanMessage 之前的所有真实消息
-            #   （已由全局截断保证总量 ≤ 10 条，此处无需额外限制）
-            context_msgs = list(messages[prev_human_idx:last_human_idx])
-
-            # 3. 构造增强的当前消息（财务上下文仍然注入）
-            enhanced_msg = user_msg
-            has_finance = _has_financial_intent(user_msg)
             if has_finance and fragments:
                 fragment_lines = "\n".join(f"  · {f}" for f in fragments)
-                enhanced_msg += f"\n\n---\n【📋 数字片段 — 请从以下含数字的句子中提取财务信息（余额/预算/花费/工资）】\n{fragment_lines}"
+                enhanced_msg += f"\n\n【📋 数字片段】\n{fragment_lines}"
 
             if has_finance and number_table:
                 table_lines = "\n".join(
                     f"  {n['value']} ← \"{n['context']}\"" for n in number_table
                 )
-                enhanced_msg += f"\n\n【🔢 数字对照表 — 你提取的金额必须能在下表中找到对应数字，找不到说明你编造了】\n{table_lines}"
+                enhanced_msg += f"\n【🔢 数字对照表 — 提取的金额必须能在表中找到】\n{table_lines}"
 
             if has_finance and (fragments or number_table):
                 enhanced_msg += (
-                    "\n\n【⚠️ 提取要求】"
-                    "\n· 从数字片段中语义判断：余额/月预算/已花费/即将到账工资 各是多少"
-                    "\n· 注意语义修正（\"好像是300，不对应该是500\" → 以修正后为准）"
-                    "\n· 中文数字需转换（\"两千八\"→2800）"
-                    "\n· 对照表用于校验——你提取的数字应能在表中找到"
+                    "\n【⚠️ 注意语义修正（\"好像是300，不对应该是500\" → 以500为准），"
+                    "中文数字需转换（\"两千八\"→2800）】"
                 )
+        # 后续循环：不注入正则结果（已经注入过了），LLM 专注于工具返回的数据
 
-            # 🔴 注入当前默认城市到路由提示词
-            default_city = _get_default_city()
-            city_context = f"\n\n## 当前用户配置\n- 默认城市：{default_city}（出行/美食相关查询默认使用此城市，除非用户指定其他城市）"
-            routing_prompt = ROUTING_PROMPT + city_context
+        # 构造消息列表：用增强版 HumanMessage 替换原来的
+        llm_messages = []
+        for i, msg in enumerate(messages):
+            if i == last_human_idx:
+                llm_messages.append(HumanMessage(content=enhanced_msg))
+            else:
+                llm_messages.append(msg)
 
-            routing_llm = llm.bind_tools(MAIN_AGENT_TOOLS)
-            response = routing_llm.invoke(
-                [SystemMessage(content=routing_prompt)]
-                + context_msgs
-                + [HumanMessage(content=enhanced_msg)]
-            )
+        # 清洗消息列表，确保 tool_call_id 不断裂
+        llm_messages = _sanitize_messages_for_api(llm_messages)
 
-            dump_reasoning(response, "MAIN-ROUTE")
-        else:
-            # ===== 合成阶段：LLM 基于全量历史整理回复 =====
-            # 🔴 仅在用户有财务意图时才注入财务上下文用于盈亏计算
-            synthesis_extra = ""
-            has_finance = _has_financial_intent(user_msg)
-            if has_finance:
-                scan = scan_number_context(user_msg)
-                fragments = scan.get("fragments", [])
-                number_table = scan.get("number_table", [])
-                if fragments:
-                    fragment_lines = "\n".join(f"  · {f}" for f in fragments)
-                    synthesis_extra += f"\n\n【用户提及的财务数字片段 — 用于盈亏计算】\n{fragment_lines}"
-                if number_table:
-                    table_lines = "\n".join(
-                        f"  {n['value']} ← \"{n['context']}\"" for n in number_table
-                    )
-                    synthesis_extra += f"\n【数字对照表】\n{table_lines}"
-                if synthesis_extra:
-                    synthesis_extra += (
-                        "\n\n⚠️ 计算盈亏时必须使用上方用户提及的余额/工资等数字："
-                        "\n  净收益 = 期间总收入 - 期间总支出 + 用户提到的当前余额 + 用户提到的即将到账收入"
-                    )
+        # ---- 城市上下文 ----
+        default_city = _get_default_city()
+        city_context = (
+            f"\n\n## 当前用户配置\n"
+            f"- 默认城市：{default_city}（出行/美食相关默认使用此城市，除非用户指定）"
+        )
 
-            synthesis_prompt = SYNTHESIS_PROMPT + synthesis_extra
-            # 只传当前轮消息，防止 checkpoint 历史中的旧模板回复污染新对话
-            current_turn_msgs = messages[last_human_idx:]
-            sanitized = _sanitize_messages_for_api(current_turn_msgs)
+        # ---- 统一：全工具可用，LLM 自己决定下一步 ----
+        full_llm = llm.bind_tools(MAIN_AGENT_TOOLS)
+        response = full_llm.invoke(
+            [SystemMessage(content=MAIN_AGENT_PROMPT_V3 + city_context)] + llm_messages
+        )
 
-            # 合成阶段绑定 calculate 工具，让 LLM 能调计算器做精确运算
-            synthesis_llm = llm.bind_tools([calculate])
-            response = synthesis_llm.invoke(
-                [SystemMessage(content=synthesis_prompt)] + sanitized
-            )
+        dump_reasoning(response, "MAIN-AGENT")
 
-            # 如果 LLM 调了 calculate，执行并再次合成
-            if hasattr(response, "tool_calls") and response.tool_calls:
-                from langchain_core.messages import ToolMessage as TM
-                calc_results = []
-                for tc in response.tool_calls:
-                    if tc.get("name") == "calculate":
-                        args = tc.get("args", {})
-                        expr = args.get("expression", "")
-                        calc_result = calculate.invoke(args)
-                        calc_results.append(TM(
-                            content=str(calc_result),
-                            tool_call_id=tc.get("id", ""),
-                            name="calculate",
-                        ))
-                        logger.debug("🧮 计算: %s = %s", expr, calc_result)
-                if calc_results:
-                    # 将计算结果追加到当前轮消息中，再调一次 LLM 生成最终回复
-                    final_response = llm.invoke(
-                        [SystemMessage(content=synthesis_prompt)] + sanitized + [response] + calc_results
-                    )
-                    response = final_response
-
-            dump_reasoning(response, "MAIN-SYNTH")
-
+        # 日志
         tool_count = len(response.tool_calls) if hasattr(response, "tool_calls") and response.tool_calls else 0
         if tool_count > 0:
             for tc in response.tool_calls:

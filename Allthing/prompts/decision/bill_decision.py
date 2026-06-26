@@ -19,7 +19,6 @@ BILL_DECISION_FRAMEWORK = (
 
 当查询意图为以下任一情况时，**优先调用 get_daily_spending_baseline()**，而不是 get_date_range_bill_data：
 - 上级 Agent 询问"日常开销"、"日均消费"、"日常消费基线"
-- query_bill_budget 传入的查询中有"日均消费金额"、"月度预算和消费模式"
 - 用户问"我每天大概花多少"、"日常开销多少"
 - 任何需要将日均消费作为预算计算基准的场景
 
