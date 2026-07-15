@@ -1,6 +1,6 @@
 # LifeOps Agent V3.0
 
-基于 LangGraph 的多 Agent 智能生活管家，主 Agent 全程驾驶决策，Bill Agent（账单分析）和 Travel Agent（出行规划）作为子工具按需沙箱调用。
+基于 LangGraph 的多 Agent 智能生活管家。主 Agent 全程驾驶决策，Bill Agent（账单分析）和 Travel Agent（出行规划）作为子工具按需沙箱调用。
 
 ---
 
@@ -8,12 +8,12 @@
 
 | 模块 | 功能 |
 |------|------|
-| **智能对话** | 自然语言交互，主 Agent 自动拆解意图、调度子工具、融合多源数据 |
-| **账单管理** | 微信支付账单 IMAP 自动下载 → 解压 → CSV 解析 → 按月分片 → 图表生成 → 花销分类统计 |
-| **出行规划** | 餐饮推荐、景点搜索、路线规划、天气查询，三层信息源：本地经验库 RAG → 百度地图 API → 联网搜索 |
+| **智能对话** | 自然语言交互，主 Agent 自动拆解意图、调度子 Agent、融合多源数据 |
+| **账单管理** | 微信支付账单 IMAP 自动下载 → 解压 → CSV 解析 → 按月分片存储 → 图表生成 → 花销分类统计 |
+| **出行规划** | 餐饮推荐、景点搜索、路线规划（驾车/公交/步行）、天气查询，基于本地经验库 RAG + 百度地图 API |
 | **省钱目标** | 预算设置、支出追踪、目标进度管理 |
-| **知识库 RAG** | 本地 Markdown 文档向量化（ChromaDB），语义检索，Critic 自省护栏反向交叉验证 |
-| **个人中心** | 用户配置管理、多用户对话历史隔离 |
+| **知识库 RAG** | 本地 Markdown 文档向量化（ChromaDB），混合检索（向量语义 + 关键词加权 + 标签匹配） |
+| **前端界面** | 账单中心（收支统计 + 图表）、文档中心（知识库上传/预览）、个人中心（服务器配置/邮箱配置） |
 
 ---
 
@@ -50,16 +50,9 @@ email:
 
 ### 3. 百度地图前端 AK
 
-两处 HTML 文件需要填入百度地图浏览器端 AK：
+编辑 `LifeOps助手/index.html` 第 14 行，将 `YOUR_BAIDU_MAPS_AK` 替换为百度地图开放平台申请的**浏览器端 AK**。
 
-| 文件 | 行号 | 说明 |
-|------|------|------|
-| `LifeOps助手/index.html` | 第 14 行 | uni-app 前端入口 |
-| `Allthing/visualize_route.html` | 第 12 行 | 路线调试页面 |
-
-将 `YOUR_BAIDU_MAPS_AK` 替换为你在百度地图开放平台申请的**浏览器端 AK**。
-
-后端 `Allthing/server.py` 通过 `BAIDU_MAPS_BROWSER_AK` 环境变量读取，前端页面直接通过 `/api/config/map-ak` 接口获取。
+后端 `Allthing/server.py` 通过 `BAIDU_MAPS_BROWSER_AK` 环境变量读取 AK，前端可通过 `/api/config/map-ak` 接口动态获取。
 
 ---
 
@@ -98,21 +91,40 @@ npm run dev:mp-weixin # 微信小程序
 │   ├── main.py                        # CLI 入口
 │   ├── server.py                      # FastAPI（WebSocket + REST）
 │   ├── requirements.txt               # Python 依赖
-│   ├── config/                        # 配置（YAML 二层加载 + 脱敏）
-│   ├── graph/                         # LangGraph 状态机（主图 + 子图）
-│   ├── tools/                         # 工具集（账单/地图/知识库/省钱/时间）
+│   ├── config/
+│   │   ├── config.yml                 # 系统默认配置
+│   │   ├── user_config.yml            # 用户覆盖配置（已 gitignore）
+│   │   └── config_loader.py           # 配置加载器（二层加载 + 脱敏）
+│   ├── graph/                         # LangGraph 状态机
+│   │   ├── graph_builder.py           # 主 Agent 图
+│   │   ├── bill_node.py               # Bill Agent 子图（ReAct）
+│   │   ├── travel_node.py             # Travel Agent 子图（ReAct）
+│   │   ├── cross_agent.py             # 主 Agent 调子 Agent 的工具函数
+│   │   ├── state.py                   # 状态定义
+│   │   └── tool_tracer.py             # 工具调用追踪
+│   ├── tools/                         # 工具集
+│   │   ├── bill/                      # 账单工具（邮箱下载/解压/查询/图表）
+│   │   ├── maps/                      # 百度地图工具（POI/路线/天气/地理编码）
+│   │   ├── knowledge/                 # RAG 检索工具
+│   │   ├── savings/                   # 省钱目标管理
+│   │   ├── common/                    # 通用工具（计算器）
+│   │   └── time/                      # 时间工具
 │   ├── prompts/                       # 动态 Prompt 拼装
-│   ├── llm/                           # LLM 模型注册
+│   ├── llm/                           # LLM 模型注册（通义/OpenAI/DeepSeek 可切换）
 │   ├── routing/                       # 任务分解
 │   ├── knowledge_base/                # RAG 源语料（Markdown）
-│   ├── monitoring/                    # RAG 可观测性
-│   ├── guardrails/                    # Critic 自省护栏
+│   ├── monitoring/                    # RAG 日志与监控
+│   ├── guardrails/                    # 工具调用护栏 + 输出内容审查
 │   ├── docs/                          # 设计文档
 │   └── data/                          # 运行时数据（账单/checkpoint/向量库）
 │
 └── LifeOps助手/                       # 前端（uni-app + Vue3）
-    ├── pages/                         # 页面（首页/账单/文档/我的）
-    ├── components/                    # 组件
+    ├── pages/
+    │   ├── index/                     # 智能管家（对话页）
+    │   ├── bill/                      # 账单中心
+    │   ├── docs/                      # 文档中心
+    │   └── mine/                      # 个人中心
+    ├── components/                    # 组件（输入框/消息气泡/地图/账单）
     ├── store/                         # Pinia 状态管理
     ├── utils/                         # API / WebSocket / Markdown
     └── index.html                     # 入口（需配百度地图 AK）
@@ -128,7 +140,7 @@ npm run dev:mp-weixin # 微信小程序
 | LLM | 通义千问 qwen-plus / qwen-max（可切换 OpenAI / DeepSeek） |
 | Embedding | DashScope text-embedding-v2（1536 维） |
 | 向量库 | ChromaDB |
-| 地图 | 百度地图 Web 服务 API + BMapGL |
+| 地图 | 百度地图 Web 服务 API + BMapGL 前端渲染 |
 | 数据处理 | pandas + matplotlib |
 | 后端框架 | FastAPI + WebSocket |
 | 前端框架 | uni-app (Vue 3) + Pinia |
