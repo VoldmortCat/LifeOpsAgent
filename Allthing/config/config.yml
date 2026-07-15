@@ -44,8 +44,8 @@ paths:
 # ---------- 邮箱配置 ----------
 email:
   imap_server: "imap.163.com"
-  username: "13714922737@163.com"
-  password: "BLpzxsMCdygCTsak"
+  username: "your_email@163.com"
+  password: "your_email_password"
   watch_folder: "INBOX"
 
 # ---------- 账单模块配置 ----------

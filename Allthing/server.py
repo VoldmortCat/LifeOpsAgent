@@ -56,11 +56,11 @@ def _get_router():
 
 # ====================== 系统配置 API ======================
 
-BAIDU_MAPS_AK = "ZnFT7hYeW2of3mDHL0foSVjNyLFVOoxL"
+BAIDU_MAPS_AK = os.environ.get("BAIDU_MAPS_BROWSER_AK", "")
 
 @app.get("/api/config/map-ak")
 def get_map_ak():
-    ak = BAIDU_MAPS_AK or os.environ.get("BAIDU_MAPS_BROWSER_AK") or os.environ.get("BAIDU_MAPS_API_KEY", "")
+    ak = BAIDU_MAPS_AK or os.environ.get("BAIDU_MAPS_API_KEY", "")
     return {"ok": True, "ak": ak}
 
 
