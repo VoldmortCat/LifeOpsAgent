@@ -4,3 +4,25 @@ config/user_config.yml
 # Python
 __pycache__/
 *.pyc
+
+# 敏感数据（含真实账单交易记录，绝对不提交）
+data/bills/*.csv
+data/bills/charts/
+
+# 运行时生成的数据（可重建，不提交）
+data/checkpoints/         # 对话历史 SQLite（含个人对话内容）
+data/vectordb/            # 向量库（可从 knowledge_base 重建）
+data/monitoring/          # 运行日志
+data/savings/             # 存款目标（个人数据）
+
+# 临时文件
+workspace/input/
+workspace/unzipped/
+
+# IDE
+.vscode/
+.claude/
+
+# 文档草稿（非正式文档）
+待做事项/
+Propmpt工程计划/

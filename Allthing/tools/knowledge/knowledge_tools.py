@@ -132,6 +132,15 @@ def _load_from_chromadb() -> Tuple[Optional[List[Dict]], Optional[np.ndarray], f
         entries = [json.loads(d) for d in all_data["documents"]]
         embeddings = np.array(all_data["embeddings"], dtype=np.float32)
 
+        # 合并 metadatas 进 entries（兜底：旧数据可能没有 city 字段）
+        metadatas = all_data.get("metadatas") or []
+        for i, meta in enumerate(metadatas):
+            if i < len(entries) and meta:
+                if not entries[i].get("city"):
+                    entries[i]["city"] = meta.get("city", "未知")
+                if not entries[i].get("category"):
+                    entries[i]["category"] = meta.get("category", "未知")
+
         col_meta = collection.metadata or {}
         stored_mtime = col_meta.get("build_mtime", 0.0)
 
@@ -157,11 +166,58 @@ def _save_to_chromadb(entries: List[Dict], embeddings: np.ndarray, mtime: float)
     batch_size = 100
     for i in range(0, len(entries), batch_size):
         batch_end = min(i + batch_size, len(entries))
+        # 构建 metadatas：把 city/category 等 frontmatter 字段存进去，支持检索时 where 前置过滤
+        metadatas = []
+        for e in entries[i:batch_end]:
+            meta = {
+                "city": e.get("city", "未知"),
+                "category": e.get("category", "未知"),
+                "source_file": e.get("source_file", ""),
+            }
+            metadatas.append(meta)
         collection.add(
             ids=[f"entry_{j}" for j in range(i, batch_end)],
             embeddings=embeddings[i:batch_end].tolist(),
             documents=[json.dumps(e, ensure_ascii=False) for e in entries[i:batch_end]],
+            metadatas=metadatas,
         )
+
+
+def _read_frontmatter(filepath: str) -> Dict[str, str]:
+    """
+    读取 md 文件头的 YAML frontmatter（--- 包裹的元数据块）。
+    返回 frontmatter 字段字典；无 frontmatter 时返回空字典。
+
+    格式示例：
+        ---
+        city: 中山
+        category: 美食
+        ---
+        # 正文标题
+    """
+    try:
+        with open(filepath, "r", encoding="utf-8") as fh:
+            content = fh.read()
+    except Exception:
+        return {}
+
+    if not content.startswith("---"):
+        return {}
+
+    parts = content.split("---", 2)
+    if len(parts) < 3:
+        return {}
+
+    meta: Dict[str, str] = {}
+    for line in parts[1].strip().split("\n"):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if ":" in line:
+            key, _, val = line.partition(":")
+            meta[key.strip()] = val.strip()
+
+    return meta
 
 
 def _extract_tags(title: str, content: str) -> List[str]:
@@ -195,6 +251,17 @@ def _parse_blocks(filepath: str, category: str, rel_path: str) -> List[Dict]:
             content = fh.read()
     except Exception:
         return blocks
+
+    # 读取 frontmatter（文件级元数据：city/category 等）
+    file_meta = _read_frontmatter(filepath)
+    file_city = file_meta.get("city", "未知")
+    file_category = file_meta.get("category", category)
+
+    # 剥离 frontmatter 块，避免它被当作正文 chunk
+    if content.startswith("---"):
+        parts = content.split("---", 2)
+        if len(parts) >= 3:
+            content = parts[2].lstrip("\n")
 
     raw_chunks = re.split(r"\n(?=##\s)", content)
 
@@ -234,7 +301,8 @@ def _parse_blocks(filepath: str, category: str, rel_path: str) -> List[Dict]:
             "title": title,
             "content": content_text,
             "tags": tags,
-            "category": category,
+            "category": file_category,
+            "city": file_city,
             "source_file": rel_path,
             "full_text": full_text,
         })
@@ -556,7 +624,7 @@ def _log_rag_query(query: str, ranked: list, latency_ms: float):
 
 
 @tool
-def search_knowledge(query: str, max_results: int = 6, city: str = "") -> str:
+def search_knowledge(query: str, max_results: int = 6, city: str = "", mode: str = "vector") -> str:
     """
     在本地知识库中搜索中山美食/旅行/景点/住宿/交通/购物经验（向量语义检索）。
     这是本地经验库的首要检索工具。当用户询问以下任一类问题时，必须优先使用：
@@ -566,7 +634,7 @@ def search_knowledge(query: str, max_results: int = 6, city: str = "") -> str:
     - 住宿推荐："住哪里"、"推荐酒店/民宿"、"XX附近住宿"、"温泉酒店"
     - 交通出行："怎么去XX"、"深中通道"、"公交/自驾"、"城轨怎么坐"
     - 购物特产："去哪逛街"、"买手信/特产"、"商场推荐"、"杏仁饼/腊味去哪买"
-    - 避坑攻略："有什么坑"、"注意什么"、"什么时候去最好"、"排队/预约"
+    - 实用贴士："什么时候去最好"、"有什么注意事项"
 
     **重要**：务必传入 city 参数（用户的默认城市），系统会标注每条结果是否匹配该城市。
     如果大量结果 city_match 为 false，说明知识库中缺少该城市的数据，应如实告知用户。
@@ -575,6 +643,7 @@ def search_knowledge(query: str, max_results: int = 6, city: str = "") -> str:
         query: 搜索关键词或自然语言描述，如"中山一日游路线"、"推荐好吃的乳鸽"
         max_results: 最大返回条数，默认6
         city: 用户当前所在城市，如"中山"、"梅州"。用于标注结果是否属于该城市
+        mode: 检索模式。"vector"=纯向量检索（默认），"hybrid"=BM25+向量混合检索
 
     Returns:
         JSON 格式搜索结果，含 city_match_summary（城市匹配概况）和每条结果的 city_match 标注
@@ -586,12 +655,47 @@ def search_knowledge(query: str, max_results: int = 6, city: str = "") -> str:
     if not entries:
         return json.dumps({"error": "知识库为空，请先导入数据", "total": 0}, ensure_ascii=False)
 
+    # ===== 前置过滤：按 city 字段过滤 entries（基于 frontmatter 显式标注） =====
+    # 只保留 city 匹配的条目 + city="未知"的条目（旧数据兜底，不误杀）
+    if city:
+        filtered_indices = [
+            i for i, e in enumerate(entries)
+            if e.get("city", "未知") == city or e.get("city", "未知") == "未知"
+        ]
+        if filtered_indices and len(filtered_indices) < len(entries):
+            entries = [entries[i] for i in filtered_indices]
+            emb_matrix = emb_matrix[filtered_indices]
+
     ranked = _hybrid_search(query, entries, emb_matrix, max_results)
+
+    # ===== BM25 混合检索模式（覆盖 vector 检索结果） =====
+    if mode == "hybrid":
+        try:
+            from tools.knowledge.hybrid_retriever import BM25HybridRetriever, is_bm25_available
+            if is_bm25_available():
+                retriever = BM25HybridRetriever(entries, emb_matrix)
+                bm25_fused = retriever.search(query, top_k=max_results, candidate_k=20)
+
+                # 将 BM25 融合结果转为与 _hybrid_search 相同的格式
+                ranked_hybrid = []
+                for idx, rrf_score in bm25_fused:
+                    entry = dict(entries[idx])
+                    entry["_vector_score"] = 0.0
+                    entry["_kw_boost"] = 0.0
+                    entry["_tag_boost"] = 0.0
+                    entry["_score"] = round(rrf_score, 4)  # 线性融合得分已在 [0, 1] 范围
+                    ranked_hybrid.append(entry)
+                ranked = ranked_hybrid
+                logger.debug("BM25 混合检索: %d 条结果", len(ranked))
+            else:
+                logger.warning("BM25 依赖未安装，回退到纯向量检索")
+        except Exception as e:
+            logger.warning("BM25 混合检索异常: %s，回退到纯向量检索", e)
 
     _latency_ms = _monotonic_ms() - _t0
     _log_rag_query(query, ranked, _latency_ms)
 
-    # ===== 城市匹配检测 =====
+    # ===== 城市匹配检测（双层：frontmatter city 字段优先，tags 区镇兜底） =====
     target_districts = set()
     if city and city in CITY_DISTRICTS:
         target_districts = set(CITY_DISTRICTS[city])
@@ -601,39 +705,46 @@ def search_knowledge(query: str, max_results: int = 6, city: str = "") -> str:
     for e in ranked:
         score = e.get("_score", 0.0)
         tags = e.get("tags", [])
+        entry_city = e.get("city", "未知")  # 来自 frontmatter 的显式标注
 
-        # 检测该条目属于哪个城市（通过标签与各城市区镇的交集判断）
+        # 优先用 frontmatter 的 city 字段判断（准确）
+        # 兜底用 tags 区镇匹配（旧数据无 frontmatter 时）
         entry_district_tags = set()
-        city_detected = ""
+        city_detected = entry_city if entry_city != "未知" else ""
         city_match = True  # 无城市限制时默认为匹配
 
-        if target_districts:
-            for tag in tags:
-                for cn, districts in CITY_DISTRICTS.items():
-                    if tag in districts:
-                        entry_district_tags.add(tag)
-                        if cn != city:
-                            city_detected = cn
-                        break
+        if city:
+            # 第1层：frontmatter city 字段直接判断
+            if entry_city != "未知":
+                if entry_city == city:
+                    city_match = True
+                    city_match_count += 1
+                else:
+                    city_match = False
+                    city_detected = entry_city
+            # 第2层：无 frontmatter 时，用 tags 区镇兜底判断
+            elif target_districts:
+                for tag in tags:
+                    for cn, districts in CITY_DISTRICTS.items():
+                        if tag in districts:
+                            entry_district_tags.add(tag)
+                            if cn != city:
+                                city_detected = cn
+                            break
 
-            # 如果条目标签和当前城市区镇有交集 → 匹配
-            matched = bool(entry_district_tags & target_districts)
-            # 如果条目标签和任何其他城市区镇匹配，但不匹配当前城市 → 记录了城市标签但不对
-            has_other_city_tag = bool(entry_district_tags - target_districts)
-            
-            if matched:
-                city_match = True
-                city_match_count += 1
-            elif has_other_city_tag:
-                city_match = False
-                # city_detected 已在上方设置
-            elif not entry_district_tags:
-                # 条目无城市相关的区域标签（比如纯美食类型标签如"乳鸽""早茶"）
-                # 标记为不确定，让 agent 根据内容自行判断
-                city_match = True
-                city_match_count += 1
-            else:
-                city_match = False
+                matched = bool(entry_district_tags & target_districts)
+                has_other_city_tag = bool(entry_district_tags - target_districts)
+
+                if matched:
+                    city_match = True
+                    city_match_count += 1
+                elif has_other_city_tag:
+                    city_match = False
+                elif not entry_district_tags:
+                    city_match = True
+                    city_match_count += 1
+                else:
+                    city_match = False
 
         # 文本级信心指示器
         if score >= 0.70:
