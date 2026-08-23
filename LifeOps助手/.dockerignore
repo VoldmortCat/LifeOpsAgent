@@ -1,0 +1,8 @@
+node_modules
+unpackage
+.git
+*.md
+Dockerfile
+.dockerignore
+.npm-cache
+dist/build/h5-archived*

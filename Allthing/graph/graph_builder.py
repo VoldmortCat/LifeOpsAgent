@@ -67,6 +67,65 @@ def _get_main_llm() -> BaseChatModel:
     return _main_llm
 
 
+# ---------- 历史摘要压缩 ----------
+# 滑动窗口只保留最近 10 条消息，防止 checkpoint 无限膨胀；
+# 窗口之外的历史不再直接丢弃，而是先用 LLM 压缩成摘要保住关键上下文。
+
+_SUMMARY_PROMPT = """你是对话历史压缩器。把下面这段"用户与生活助手"的历史对话压缩为不超过 150 字的中文摘要，必须保留：
+1. 用户的核心诉求与偏好（如默认城市、饮食/消费偏好、常提的习惯）
+2. 已确认的关键事实与数字（金额、日期等原样保留）
+3. 已得出的结论
+
+不要保留工具调用细节和试错过程。只输出摘要本身，不要任何前后缀。"""
+
+def _summarize_messages(older: list, llm) -> str:
+    """把窗口外的历史消息压缩成一段摘要文本。"""
+    lines = []
+    for m in older:
+        if isinstance(m, HumanMessage):
+            lines.append(f"用户: {m.content[:300]}")
+        elif isinstance(m, AIMessage) and not getattr(m, "tool_calls", None):
+            lines.append(f"助手: {m.content[:300]}")
+    if not lines:
+        return ""
+
+    resp = llm.invoke([
+        SystemMessage(content=_SUMMARY_PROMPT),
+        HumanMessage(content="\n".join(lines[-20:])),
+    ])
+    content = (resp.content or "").strip()
+    return content[:500]
+
+
+_MAX_WINDOW = 10
+
+def _maybe_compress_history(messages: list, llm) -> list:
+    """滑动窗口 + 摘要压缩：超过窗口的旧历史先用 LLM 压缩为摘要，再截断。
+
+    摘要失败时退化为直接截断，保证对话流程不受影响。
+    """
+    if len(messages) <= _MAX_WINDOW:
+        return messages
+
+    window = messages[-_MAX_WINDOW:]
+    older = messages[:-_MAX_WINDOW]
+
+    # 旧消息里没有真实对话内容（纯工具消息）→ 直接丢弃即可
+    if not any(isinstance(m, (HumanMessage, AIMessage)) for m in older):
+        return window
+
+    try:
+        summary = _summarize_messages(older, llm)
+    except Exception as e:
+        logger.warning("历史摘要生成失败，退化为直接截断: %s", e)
+        return window
+
+    if not summary:
+        return window
+
+    return [SystemMessage(content=f"[历史对话摘要] {summary}")] + window
+
+
 def _sanitize_messages_for_api(messages: list) -> list:
     """清理消息列表，确保符合 API 格式要求。
 
@@ -132,9 +191,9 @@ def build_lifeops_graph(checkpointer=None):
         """统一节点：每轮 LLM 拥有全部工具，自己判断是继续调工具还是回复用户。"""
         messages = list(state["messages"])
 
-        # 🔴 全局截断：只保留最近 10 条消息，防止 checkpoint 历史无限膨胀
-        if len(messages) > 10:
-            messages = messages[-10:]
+        # 上下文控制：滑动窗口（只保留最近 10 条）+ 窗口外历史 LLM 摘要压缩
+        llm = _get_main_llm()
+        messages = _maybe_compress_history(messages, llm)
 
         # 找到最后一条用户消息
         last_human_idx = -1
@@ -148,8 +207,6 @@ def build_lifeops_graph(checkpointer=None):
         has_tool_results = any(
             isinstance(m, ToolMessage) for m in messages[last_human_idx + 1:]
         )
-
-        llm = _get_main_llm()
 
         # ---- 构造消息列表 ----
         # 用当前消息替换最后一条 HumanMessage（首次调用时注入正则聚光灯结果）

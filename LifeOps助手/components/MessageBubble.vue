@@ -39,8 +39,8 @@
 				<rich-text :nodes="renderedNodes"></rich-text>
 			</view>
 
-			<!-- 嵌入式地图 -->
-			<EmbeddedMap v-if="mapData" :map-data="mapData" />
+			<!-- 百度地图链接卡片（从回复文本中检测地图链接） -->
+			<MapLink v-if="mapLink" :content="message.content" />
 
 			<!-- 时间 -->
 			<text class="bubble-time">{{ formatTime(message.timestamp) }}</text>
@@ -52,7 +52,7 @@
 <script setup>
 	import { ref, computed } from 'vue'
 	import { parseMarkdown } from '@/utils/markdown.js'
-	import EmbeddedMap from './EmbeddedMap.vue'
+	import MapLink from './MapLink.vue'
 
 	const props = defineProps({
 		message: {
@@ -67,26 +67,16 @@
 
 	const showThinking = ref(false)
 
-	// 提取地图数据：优先读 message.mapData（WebSocket 推送），fallback 到 <MAP_DATA> 标签
-	const mapData = computed(() => {
-		if (props.message.role !== 'agent') return null
-		if (props.message.mapData) return props.message.mapData
-		const match = props.message.content.match(/<MAP_DATA>([\s\S]*?)<\/MAP_DATA>/)
-		if (match) {
-			try {
-				return JSON.parse(match[1])
-			} catch (e) {
-				return null
-			}
-		}
-		return null
+	// 检测回复中是否包含百度地图链接
+	const mapLink = computed(() => {
+		if (props.message.role !== 'agent') return false
+		return /https?:\/\/map\.baidu\.com\//.test(props.message.content || '')
 	})
 
-	// 移除 MAP_DATA 后的纯文本 Markdown 渲染
+	// Markdown 渲染
 	const renderedNodes = computed(() => {
 		if (props.message.role === 'user') return []
-		const pureText = props.message.content.replace(/<MAP_DATA>[\s\S]*?<\/MAP_DATA>/, '').trim()
-		return parseMarkdown(pureText)
+		return parseMarkdown(props.message.content || '')
 	})
 
 	function formatTime(ts) {

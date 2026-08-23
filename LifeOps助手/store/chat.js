@@ -64,10 +64,6 @@ export const useChatStore = defineStore('chat', () => {
 		const { type, content, tool_name, tool_status } = data
 
 		switch (type) {
-			case 'map_data':
-				pendingMapData.value = data.data
-				break
-
 			case 'thinking':
 				// Agent 开始思考
 				isStreaming.value = true
@@ -118,7 +114,6 @@ export const useChatStore = defineStore('chat', () => {
 
 	// 流式输出缓冲区
 	const streamBuffer = ref([])
-	const pendingMapData = ref(null)
 
 	function appendOrUpdateStream(item) {
 		streamBuffer.value.push(item)
@@ -150,12 +145,10 @@ export const useChatStore = defineStore('chat', () => {
 			content: fullContent,
 			thinking: thinkingContent || null,
 			toolsUsed: toolsUsed.length > 0 ? toolsUsed : null,
-			mapData: pendingMapData.value,
 			timestamp: Date.now()
 		})
 
 		streamBuffer.value = []
-		pendingMapData.value = null
 	}
 
 	// ============ 发送消息 ============

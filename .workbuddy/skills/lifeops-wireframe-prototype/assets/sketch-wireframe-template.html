@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>LifeOps 低保真线框原型（5页 · 草图风）</title>
+<!-- ============================================================
+     TEMPLATE: 复制本文件，按需修改 .screen 内的内容即可。
+     - 草图滤镜：<svg id="sketch"> + CSS filter:url(#sketch)
+     - 多页切换：class="screen show" 控制显示，go(page) 切换
+     - 配色仅作语义标注，不填实色（低保真）
+     ============================================================ -->
+<style>
+  :root{
+    --ink:#2b2b2b; --ink2:#555; --paper:#f5f4f0; --line:#3a3a3a;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;}
+  body{background:#e9e8e3;color:var(--ink);
+    font-family:"Comic Sans MS","Segoe Print","PingFang SC","Microsoft YaHei",sans-serif;
+    padding:18px;display:flex;justify-content:center;}
+  .page-wrap{width:1080px;max-width:100%;}
+  .doc-title{text-align:center;font-size:15px;color:var(--ink2);margin:0 0 12px;letter-spacing:1px;}
+  .sketch{filter:url(#sketch);}
+
+  /* shared frame */
+  .screen{border:2.5px solid var(--ink);border-radius:10px;background:var(--paper);overflow:hidden;}
+  .topbar{display:flex;align-items:center;gap:20px;height:54px;padding:0 18px;
+    border-bottom:2.5px solid var(--ink);background:#efeee9;}
+  .logo{display:flex;align-items:center;gap:8px;font-weight:bold;font-size:17px;}
+  .logo .mark{width:26px;height:26px;border:2px solid var(--ink);border-radius:6px;
+    display:flex;align-items:center;justify-content:center;font-family:"Comic Sans MS",cursive;}
+  .nav{display:flex;gap:4px;}
+  .nav a{padding:6px 13px;border:2px solid var(--ink);border-radius:7px;font-size:13px;
+    text-decoration:none;color:var(--ink);background:#faf9f5;cursor:pointer;}
+  .nav a.active{background:var(--ink);color:#faf9f5;}
+  .top-right{margin-left:auto;font-size:12px;color:var(--ink2);border:1.5px dashed var(--line);
+    padding:4px 10px;border-radius:6px;}
+
+  .body{display:flex;min-height:560px;}
+  .sidebar{width:230px;flex-shrink:0;border-right:2.5px solid var(--ink);padding:14px;background:#efeee9;}
+  .side-h{font-size:12px;color:var(--ink2);margin:0 0 8px;}
+  .cat{display:flex;align-items:center;gap:6px;padding:8px 10px;border:1.5px solid var(--ink);
+    border-radius:6px;margin-bottom:7px;font-size:13px;background:#faf9f5;}
+  .cat .n{margin-left:auto;font-size:11px;color:var(--ink2);}
+  .new-cat{width:100%;padding:8px;border:2px dashed var(--line);border-radius:6px;background:none;
+    color:var(--ink2);font-size:12px;cursor:pointer;font-family:inherit;}
+  .main{flex:1;padding:18px;overflow-y:auto;}
+
+  .toolbar{display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap;}
+  .toolbar .t{font-size:15px;font-weight:bold;margin-right:6px;}
+  .btn{padding:7px 12px;border:2px solid var(--ink);border-radius:7px;background:#faf9f5;
+    font-size:12px;cursor:pointer;font-family:inherit;color:var(--ink);}
+  .btn.primary{background:var(--ink);color:#faf9f5;}
+  .search{flex:1;min-width:150px;max-width:260px;padding:7px 10px;border:2px solid var(--ink);
+    border-radius:7px;background:#fff;font-size:12px;font-family:inherit;}
+
+  .cards{display:flex;flex-direction:column;gap:13px;}
+  .card{border:2px solid var(--ink);border-radius:9px;padding:13px 15px;background:#faf9f5;}
+  .card .row1{display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap;}
+  .tag{border:1.5px solid var(--ink);border-radius:5px;padding:2px 8px;font-size:11px;}
+  .tag.dash{border-style:dashed;}
+  .card .ttl{font-size:14px;font-weight:bold;margin:4px 0 7px;}
+  .card .ct{font-size:12px;border:1.5px solid var(--line);border-radius:6px;padding:8px 10px;
+    background:#fff;margin-bottom:7px;color:var(--ink2);}
+  .card .kp{font-size:12px;margin:5px 0;}
+  .ai{font-size:12px;border-left:3px solid var(--ink);padding:6px 9px;background:#fff;
+    border-radius:0 6px 6px 0;margin:7px 0;color:var(--ink2);}
+  .card .row2{display:flex;align-items:center;gap:12px;margin-top:8px;padding-top:8px;
+    border-top:1.5px dashed var(--line);flex-wrap:wrap;}
+  .card .row2 .m{font-size:11px;color:var(--ink2);}
+  .card .row2 .acts{margin-left:auto;display:flex;gap:7px;}
+
+  /* chat */
+  .chat{display:flex;flex-direction:column;height:100%;}
+  .chat-h{padding:13px 16px;border-bottom:2px solid var(--ink);font-weight:bold;background:#efeee9;}
+  .chat-body{flex:1;padding:16px;display:flex;flex-direction:column;gap:14px;overflow-y:auto;}
+  .msg{max-width:74%;padding:10px 13px;border:2px solid var(--ink);border-radius:12px;font-size:13px;}
+  .msg.ai{align-self:flex-start;background:#faf9f5;}
+  .msg.me{align-self:flex-end;background:#e3e2dc;}
+  .msg .who{font-size:10px;color:var(--ink2);margin-bottom:4px;}
+  .chat-in{display:flex;gap:9px;padding:12px 16px;border-top:2px solid var(--ink);background:#efeee9;}
+  .chat-in textarea{flex:1;min-height:42px;border:2px solid var(--ink);border-radius:8px;
+    padding:9px;font-size:12px;font-family:inherit;resize:none;background:#fff;}
+  .chat-in .btn{align-self:flex-end;}
+
+  /* dashboard */
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:13px;margin-bottom:16px;}
+  .stat{border:2px solid var(--ink);border-radius:9px;padding:14px;background:#faf9f5;text-align:center;}
+  .stat .num{font-size:26px;font-weight:bold;border-bottom:1.5px dashed var(--line);padding-bottom:6px;margin-bottom:6px;}
+  .stat .lab{font-size:12px;color:var(--ink2);}
+  .panel{border:2px solid var(--ink);border-radius:9px;padding:15px;background:#faf9f5;margin-bottom:15px;}
+  .panel h3{margin:0 0 14px;font-size:14px;border-bottom:1.5px solid var(--ink);padding-bottom:7px;}
+  .chart{display:flex;align-items:flex-end;gap:14px;height:150px;border-bottom:2px solid var(--ink);
+    border-left:2px solid var(--ink);padding:0 6px;margin:0 6px 6px;}
+  .chart .bar{flex:1;background:none;border:2px solid var(--ink);border-bottom:none;
+    display:flex;align-items:flex-start;justify-content:center;font-size:10px;color:var(--ink2);}
+  .chart-x{display:flex;gap:14px;margin:0 6px;font-size:11px;color:var(--ink2);}
+  .chart-x span{flex:1;text-align:center;}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:15px;}
+
+  /* settings / form */
+  .form{max-width:520px;margin:0 auto;}
+  .field{margin-bottom:16px;}
+  .field label{display:block;font-size:12px;color:var(--ink2);margin-bottom:6px;}
+  .field input{width:100%;padding:10px 12px;border:2px solid var(--ink);border-radius:7px;
+    background:#fff;font-size:13px;font-family:inherit;}
+  .field .hint{font-size:11px;color:var(--ink2);margin-top:5px;}
+  .form .acts{display:flex;gap:10px;justify-content:flex-end;}
+
+  /* list (账单明细) */
+  .listrow{display:flex;align-items:center;justify-content:space-between;border:1.5px solid var(--ink);
+    border-radius:8px;padding:10px 13px;margin-bottom:8px;background:#faf9f5;}
+  .listrow .l{display:flex;align-items:center;gap:10px;font-size:13px;}
+  .listrow .ic{width:28px;height:28px;border:1.5px solid var(--ink);border-radius:7px;display:flex;align-items:center;justify-content:center;}
+  .listrow .amt{font-family:monospace;font-size:13px;font-weight:bold;}
+  .neg::after{content:"（红/支出）";font-size:9px;color:var(--ink2);font-weight:normal;}
+  .pos::after{content:"（绿/收入）";font-size:9px;color:var(--ink2);font-weight:normal;}
+
+  .pagenum{text-align:center;font-size:11px;color:var(--ink2);margin-top:10px;}
+
+  /* tabs */
+  .screen > .body, .screen > .topbar{display:none;}
+  .screen.show > .body, .screen.show > .topbar{display:flex;}
+  .screen.show > .body.page3, .screen.show > .body.page4, .screen.show > .body.page5{display:block;}
+</style>
+</head>
+<body>
+<div class="page-wrap">
+  <div class="doc-title">LifeOps · AI 工具箱 — 低保真线框原型（草图风 / 5 页）</div>
+
+  <svg width="0" height="0" style="position:absolute">
+    <filter id="sketch">
+      <feTurbulence type="fractalNoise" baseFrequency="0.018" numOctaves="3" seed="7" result="n"/>
+      <feDisplacementMap in="SourceGraphic" in2="n" scale="2.4" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+  </svg>
+
+  <div class="sketch">
+
+  <!-- ============ PAGE 1: 智能管家 ============ -->
+  <div class="screen show" id="p-home">
+    <div class="topbar">
+      <div class="logo"><span class="mark">L</span>LifeOps</div>
+      <nav class="nav">
+        <a class="active" onclick="go('home')">智能管家</a>
+        <a onclick="go('bill')">账单中心</a>
+        <a onclick="go('docs')">文档中心</a>
+        <a onclick="go('mine')">个人中心</a>
+      </nav>
+      <div class="top-right">●● 已连接 ｜ <a onclick="go('mine')" style="cursor:pointer;text-decoration:underline">⚙ 设置</a></div>
+    </div>
+    <div class="body">
+      <main class="main">
+        <div class="toolbar">
+          <span class="t">💬 智能管家</span>
+          <input class="search" placeholder="🔍 问点什么…（查账单/规划出行/总结文档）"/>
+          <button class="btn primary">发送</button>
+        </div>
+        <!-- 空状态 4 个快捷按钮 -->
+        <div class="cards">
+          <div class="card" style="text-align:center">
+            <div class="ttl">快捷入口</div>
+            <div class="row1" style="justify-content:center">
+              <span class="tag">📊 查账单</span><span class="tag">🧳 出行规划</span>
+              <span class="tag">📄 文档总结</span><span class="tag">🎯 省钱目标</span>
+            </div>
+          </div>
+          <!-- 示例对话 -->
+          <div class="card">
+            <div class="msg ai" style="max-width:100%;margin-bottom:8px"><div class="who">LifeOps Agent</div>本月已支出 ¥3,280，剩余预算 ¥1,720。💡 AI 建议：周末出行控制在 ¥500 内。</div>
+            <div class="ai">🔧 get_monthly_bill ✅ 已获取 128 条记录</div>
+            <div class="ct" style="border-style:dashed">[ 思考过程折叠块：先查预算 → 再在预算内推荐方案 ]</div>
+          </div>
+        </div>
+      </main>
+    </div>
+    <div class="pagenum">页面 1 / 5 — 智能管家（对话主页）</div>
+  </div>
+
+  <!-- ============ PAGE 2: 账单中心 ============ -->
+  <div class="screen" id="p-bill">
+    <div class="topbar">
+      <div class="logo"><span class="mark">L</span>LifeOps</div>
+      <nav class="nav">
+        <a onclick="go('home')">智能管家</a>
+        <a class="active" onclick="go('bill')">账单中心</a>
+        <a onclick="go('docs')">文档中心</a>
+        <a onclick="go('mine')">个人中心</a>
+      </nav>
+      <div class="top-right">●● 已连接 ｜ <a onclick="go('mine')" style="cursor:pointer;text-decoration:underline">⚙ 设置</a></div>
+    </div>
+    <div class="body page3">
+      <main class="main">
+        <div class="stats">
+          <div class="stat"><div class="num">¥3,280</div><div class="lab">本月支出（红）</div></div>
+          <div class="stat"><div class="num">¥9,600</div><div class="lab">本月收入（绿）</div></div>
+          <div class="stat"><div class="num">¥1,720</div><div class="lab">剩余预算</div></div>
+          <div class="stat"><div class="num">128</div><div class="lab">笔数</div></div>
+        </div>
+        <div class="panel">
+          <h3>分类占比</h3>
+          <div class="chart">
+            <div class="bar" style="height:80%">餐饮</div>
+            <div class="bar" style="height:55%">交通</div>
+            <div class="bar" style="height:40%">购物</div>
+            <div class="bar" style="height:25%">其他</div>
+          </div>
+        </div>
+        <div class="listrow"><div class="l"><span class="ic">🍜</span>中山食街·聚餐 <span style="font-size:11px;color:var(--ink2)">08-18</span></div><span class="amt neg">-186.00</span></div>
+        <div class="listrow"><div class="l"><span class="ic">💰</span>工资到账 <span style="font-size:11px;color:var(--ink2)">08-15</span></div><span class="amt pos">+9600.00</span></div>
+      </main>
+    </div>
+    <div class="pagenum">页面 2 / 5 — 账单中心</div>
+  </div>
+
+  <!-- ============ PAGE 3: 文档中心 ============ -->
+  <div class="screen" id="p-docs">
+    <div class="topbar">
+      <div class="logo"><span class="mark">L</span>LifeOps</div>
+      <nav class="nav">
+        <a onclick="go('home')">智能管家</a>
+        <a onclick="go('bill')">账单中心</a>
+        <a class="active" onclick="go('docs')">文档中心</a>
+        <a onclick="go('mine')">个人中心</a>
+      </nav>
+      <div class="top-right">●● 已连接 ｜ <a onclick="go('mine')" style="cursor:pointer;text-decoration:underline">⚙ 设置</a></div>
+    </div>
+    <div class="body page3">
+      <main class="main">
+        <div class="toolbar">
+          <span class="t">📄 文档中心</span>
+          <button class="btn primary">＋ 导入</button>
+          <input class="search" placeholder="🔍 搜索文档…"/>
+        </div>
+        <div class="cards">
+          <div class="card"><div class="row1"><span class="tag">PDF</span><span class="tag dash">12MB · 更新 08-17</span></div><div class="ttl">毕业设计论文_终稿.pdf</div></div>
+          <div class="card"><div class="row1"><span class="tag">Word</span><span class="tag dash">3MB · 更新 08-15</span></div><div class="ttl">实习报告.docx</div></div>
+          <div class="card"><div class="row1"><span class="tag">图片</span><span class="tag dash">5MB · 更新 08-12</span></div><div class="ttl">合同扫描件.jpg</div><div class="ai">💡 AI：点击可生成摘要与要点提炼</div></div>
+        </div>
+      </main>
+    </div>
+    <div class="pagenum">页面 3 / 5 — 文档中心</div>
+  </div>
+
+  <!-- ============ PAGE 4: 个人中心 ============ -->
+  <div class="screen" id="p-mine">
+    <div class="topbar">
+      <div class="logo"><span class="mark">L</span>LifeOps</div>
+      <nav class="nav">
+        <a onclick="go('home')">智能管家</a>
+        <a onclick="go('bill')">账单中心</a>
+        <a onclick="go('docs')">文档中心</a>
+        <a class="active" onclick="go('mine')">个人中心</a>
+      </nav>
+      <div class="top-right">●● 已连接 ｜ <a onclick="go('mine')" style="cursor:pointer;text-decoration:underline">⚙ 设置</a></div>
+    </div>
+    <div class="body page4">
+      <main class="main">
+        <div class="form">
+          <div class="field"><label>邮箱配置（IMAP 半自动导入）</label><input placeholder="name@qq.com"/><div class="hint">用户手动导出账单到邮箱，Agent 拉取解压归档。</div></div>
+          <div class="field"><label>出行偏好（目的地 / 口味 / 预算）</label><input placeholder="中山 · 清淡 · ¥500/周末"/><div class="hint">用于「预算约束出行推荐」。</div></div>
+          <div class="field"><label>账单导入渠道</label><input placeholder="微信 / 支付宝 / CSV 半自动"/><div class="hint">多渠道统一导入器。</div></div>
+          <div class="acts"><button class="btn">退出登录</button><button class="btn primary">保存设置</button></div>
+        </div>
+      </main>
+    </div>
+    <div class="pagenum">页面 4 / 5 — 个人中心</div>
+  </div>
+
+  <!-- ============ PAGE 5: 帮助 / 关于 ============ -->
+  <div class="screen" id="p-help">
+    <div class="topbar">
+      <div class="logo"><span class="mark">L</span>LifeOps</div>
+      <nav class="nav">
+        <a onclick="go('home')">智能管家</a>
+        <a onclick="go('bill')">账单中心</a>
+        <a onclick="go('docs')">文档中心</a>
+        <a class="active" onclick="go('mine')">个人中心</a>
+      </nav>
+      <div class="top-right">●● 已连接 ｜ <a onclick="go('mine')" style="cursor:pointer;text-decoration:underline">⚙ 设置</a></div>
+    </div>
+    <div class="body page5">
+      <main class="main">
+        <div class="help" style="max-width:720px;margin:0 auto;line-height:1.9;font-size:13px;">
+          <h3 style="font-size:14px;border-bottom:1.5px solid var(--ink);padding-bottom:6px;margin:18px 0 10px;">一、产品介绍</h3>
+          <div class="card">LifeOps 是面向个人的 <b>AI 工具箱</b>：账单导入 → 预算分析 → 出行/消费推荐，多 Agent 协作，数据本地优先。</div>
+          <h3 style="font-size:14px;border-bottom:1.5px solid var(--ink);padding-bottom:6px;margin:18px 0 10px;">二、快速上手</h3>
+          <div class="card" style="border-style:dashed">1. 在「个人中心」配置邮箱 / 账单导入渠道。</div>
+          <div class="card" style="border-style:dashed">2. 在「智能管家」问「这个月花了多少」→ 自动拉账单分析。</div>
+          <div class="card" style="border-style:dashed">3. 问「周末去哪玩，预算 500」→ 预算约束出行推荐。</div>
+          <div class="card" style="border-style:dashed">4. 在「文档中心」导入文件 → AI 摘要提炼。</div>
+          <h3 style="font-size:14px;border-bottom:1.5px solid var(--ink);padding-bottom:6px;margin:18px 0 10px;">三、常见问题</h3>
+          <div class="card"><b>Q：数据存哪？</b>本地优先，导入即归档，不上传第三方。</div>
+          <div class="card"><b>Q：支持哪些渠道？</b>微信 / 支付宝 / CSV 半自动导入。</div>
+        </div>
+      </main>
+    </div>
+    <div class="pagenum">页面 5 / 5 — 帮助 / 关于</div>
+  </div>
+
+  </div><!-- /sketch -->
+</div>
+
+<script>
+  function go(p){
+    const map={home:'p-home',bill:'p-bill',docs:'p-docs',mine:'p-mine',help:'p-help'};
+    document.querySelectorAll('.screen').forEach(s=>s.classList.remove('show'));
+    document.getElementById(map[p]).classList.add('show');
+    window.scrollTo(0,0);
+  }
+</script>
+</body>
+</html>

@@ -98,7 +98,7 @@ export function parseMarkdown(text) {
 	return nodes
 }
 
-// 行内解析：粗体、斜体、行内代码
+// 行内解析：链接、粗体、斜体、行内代码
 function parseInline(text) {
 	if (!text) return [{ type: 'text', text: '' }]
 
@@ -106,6 +106,19 @@ function parseInline(text) {
 	let remaining = text
 
 	while (remaining.length > 0) {
+		// 链接 [text](url)
+		const linkMatch = remaining.match(/^(.*?)\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/)
+		if (linkMatch) {
+			if (linkMatch[1]) result.push({ type: 'text', text: linkMatch[1] })
+			result.push({
+				name: 'a',
+				attrs: { href: linkMatch[3], class: 'md-link' },
+				children: [{ type: 'text', text: linkMatch[2] }]
+			})
+			remaining = remaining.slice(linkMatch[0].length)
+			continue
+		}
+
 		// 粗体 **text**
 		const boldMatch = remaining.match(/^(.*?)\*\*(.+?)\*\*/)
 		if (boldMatch) {

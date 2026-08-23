@@ -30,9 +30,6 @@ export DASHSCOPE_API_KEY="your_dashscope_api_key"
 # 可选 —— 百度地图服务端 API（出行路线规划等需要）
 export BAIDU_MAPS_API_KEY="your_baidu_maps_server_key"
 
-# 可选 —— 百度地图浏览器端 AK（前端地图渲染用）
-export BAIDU_MAPS_BROWSER_AK="your_baidu_maps_browser_ak"
-
 # 可选 —— LangSmith 调试追踪
 export LANGCHAIN_API_KEY="your_langsmith_api_key"
 
@@ -59,15 +56,9 @@ email:
 
 > **注意：** 163 邮箱需在设置中开启 IMAP 服务，并使用「授权码」而非登录密码。`config/user_config.yml` 作为用户个人覆盖配置已加入 `.gitignore`，不会被提交。
 
-### 3. 百度地图前端 AK
+### 3. 地图展示方式
 
-编辑 `LifeOps助手/index.html` 第 14 行，替换 `YOUR_BAIDU_MAPS_AK` 为你申请的百度地图浏览器端 AK：
-
-```html
-<script src="https://api.map.baidu.com/api?type=webgl&v=1.0&ak=YOUR_BAIDU_MAPS_AK"></script>
-```
-
-> 同样需要替换 `visualize_route.html` 第 12 行的 AK。
+前端不引入百度地图 SDK，Travel Agent 在回复末尾自动附带百度地图链接（`map.baidu.com`）。点击链接后：H5 跳转百度地图网页版、App 唤起百度地图 App、小程序复制链接到浏览器打开。
 
 ---
 
@@ -188,7 +179,7 @@ Travel Agent 产出推荐后，Critic 对推荐内容做 RAG 反向交叉验证�
     ├── components/                      # 组件
     ├── store/                           # Pinia 状态管理
     ├── utils/                           # 工具（API/WebSocket/Markdown）
-    ├── index.html                       # 入口 HTML（含百度地图 AK）
+    ├── index.html                       # 入口 HTML
     └── package.json
 ```
 

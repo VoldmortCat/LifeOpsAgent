@@ -1,0 +1,199 @@
+Metadata-Version: 2.4
+Name: dashscope
+Version: 1.27.0
+Summary: dashscope client sdk library
+Home-page: https://dashscope.aliyun.com/
+Author: Alibaba Cloud
+Author-email: dashscope@alibabacloud.com
+License: Apache 2.0
+Platform: Posix; MacOS X; Windows
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Requires-Python: >=3.8.0
+Description-Content-Type: text/markdown
+License-File: LICENSE
+License-File: LICENSE.certifi
+License-File: NOTICE
+Requires-Dist: aiohttp
+Requires-Dist: requests
+Requires-Dist: websocket-client
+Requires-Dist: cryptography
+Requires-Dist: certifi
+Requires-Dist: typer>=0.9.0
+Requires-Dist: rich>=13.0.0
+Requires-Dist: httpx>=0.27.0
+Requires-Dist: httpx-sse>=0.4.0
+Requires-Dist: prompt-toolkit>=3.0
+Requires-Dist: pydantic>=2.0
+Requires-Dist: tenacity
+Requires-Dist: tomli>=2.0; python_version < "3.11"
+Requires-Dist: PyYAML>=6.0
+Requires-Dist: textual>=0.50
+Provides-Extra: tokenizer
+Requires-Dist: tiktoken; extra == "tokenizer"
+Provides-Extra: acli-anthropic
+Requires-Dist: anthropic>=0.40; extra == "acli-anthropic"
+Provides-Extra: acli-openai
+Requires-Dist: openai>=1.30; extra == "acli-openai"
+Provides-Extra: acli-voice
+Requires-Dist: sounddevice>=0.4; extra == "acli-voice"
+Requires-Dist: numpy>=1.20; extra == "acli-voice"
+Provides-Extra: acli-camera
+Requires-Dist: opencv-python>=4.5; extra == "acli-camera"
+Provides-Extra: acli-all
+Requires-Dist: anthropic>=0.40; extra == "acli-all"
+Requires-Dist: openai>=1.30; extra == "acli-all"
+Requires-Dist: sounddevice>=0.4; extra == "acli-all"
+Requires-Dist: numpy>=1.20; extra == "acli-all"
+Requires-Dist: opencv-python>=4.5; extra == "acli-all"
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: license
+Dynamic: license-file
+Dynamic: platform
+Dynamic: provides-extra
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
+
+# DashScope Python SDK
+
+The DashScope Python SDK provides a comprehensive interface to [Alibaba Cloud Model Studio (Bailian)](https://www.alibabacloud.com/help/en/model-studio/) APIs, covering text generation, multi-modal understanding, embeddings, reranking, image/video generation, speech synthesis & recognition, and more.
+
+## What is New
+
+**v1.27.0 ships an interactive AI assistant — [DashScope SDK Expert](#ai-assistant-dashscope-sdk-expert).** Run `dashscope` with no arguments (or ask directly, e.g. `dashscope "how do I stream Generation output"`) to get SDK/API answers, runnable examples, CLI usage, and error diagnosis right in your terminal. Guidance is drawn from per-domain quick-reference skills (text, multimodal, speech, retrieval, fine-tuning, agent, cli) built on the SDK's public interfaces — parameters, outputs, and error codes — so you can ask instead of reading the docs. Type `/help` inside the assistant to view available commands.
+
+## Installation
+To install the DashScope Python SDK, simply run:
+```shell
+pip install dashscope
+```
+
+If you clone the code from github, you can install from  source by running:
+```shell
+pip install -e .
+```
+
+To use tokenizer in local mode without downloading any files, run:
+```shell
+pip install dashscope[tokenizer]
+```
+
+
+## Quick Start
+
+```python
+from http import HTTPStatus
+from dashscope import Generation
+
+responses = Generation.call(
+    model="qwen-plus",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Who are you?"},
+    ],
+    result_format="message",
+)
+
+if responses.status_code == HTTPStatus.OK:
+    print(responses.output.choices[0].message.content)
+else:
+    print(f"Error: {responses.code} - {responses.message}")
+```
+
+## API Key Authentication
+
+The SDK uses API key for authentication. Please refer to [official documentation for alibabacloud china](https://www.alibabacloud.com/help/en/model-studio/) and [official documentation for alibabacloud international](https://www.alibabacloud.com/help/en/model-studio/) regarding how to obtain your api-key.
+
+### Using the API Key
+
+1. Set the API key via code
+```python
+import dashscope
+
+dashscope.api_key = 'YOUR-DASHSCOPE-API-KEY'
+# Or specify the API key file path via code
+# dashscope.api_key_file_path='~/.dashscope/api_key'
+
+```
+
+2. Set the API key via environment variables
+
+a. Set the API key directly using the environment variable below
+
+```shell
+export DASHSCOPE_API_KEY='YOUR-DASHSCOPE-API-KEY'
+```
+
+b. Specify the API key file path via an environment variable
+
+```shell
+export DASHSCOPE_API_KEY_FILE_PATH='~/.dashscope/api_key'
+```
+
+3. Save the API key to a file
+```python
+from dashscope import save_api_key
+
+save_api_key(api_key='YOUR-DASHSCOPE-API-KEY',
+             api_key_file_path='api_key_file_location or (None, will save to default location "~/.dashscope/api_key"')
+
+```
+
+## AI Assistant: DashScope SDK Expert
+
+The SDK ships with an interactive AI assistant, **DashScope SDK Expert**, built on the bundled Agentic CLI (`dashscope/acli`) framework. For DashScope SDK/CLI users it is the recommended way to get development consultation and AI coding help — answering SDK/API questions, generating runnable examples, showing CLI usage, and diagnosing errors, right in your terminal.
+
+- Run `dashscope` with no arguments to start the assistant. On first run it offers to install the SDK Expert knowledge pack (per-domain quick-reference skills: text, multimodal, speech, retrieval, fine-tuning, agent, cli), so guidance comes from the SDK's public interfaces — parameters, outputs, error codes — without reading the source
+- Ask it instead of reading docs — e.g. `dashscope "how do I stream Generation output"` or `dashscope "CLI command to cancel a fine-tuning job"`. Type `/help` inside the assistant to list available commands (`/setup`, `/skill`, `/stats`, ...); classic SDK subcommands still work, and unrecognized commands are routed to the assistant
+
+## Supported Models
+
+| Category | Recommended Models | SDK Class |
+|----------|-------------------|-----------|
+| Text Generation | qwen3.8-max, qwen3.7-max, qwen3.7-plus, qwen3.6-flash | `Generation` |
+| Multi-Modal Understanding | qwen3.5-omni-plus, qwen3.7-plus (vision) | `MultiModalConversation` |
+| Text Embedding | text-embedding-v4, text-embedding-v3 | `TextEmbedding` |
+| Multi-Modal Embedding | tongyi-embedding-vision-plus, qwen3-vl-embedding | `MultiModalEmbedding` |
+| Text ReRank | qwen3-rerank, gte-rerank-v2 | `TextReRank` |
+| Image Generation | wan2.7-image-pro, qwen-image-2.0-pro | `ImageSynthesis` |
+| Video Generation | wan2.7-t2v, wan2.7-i2v, happyhorse-1.0-t2v/i2v | `VideoSynthesis` |
+| Speech Synthesis (TTS) | cosyvoice-v3.5-plus, cosyvoice-v1 | `SpeechSynthesizer`, `HttpSpeechSynthesizer` |
+| Speech Recognition (ASR) | fun-asr-realtime, fun-asr, paraformer-v1 | `Transcription` |
+| Omni (Real-time) | qwen3.5-omni-plus-realtime | `MultiModalConversation` |
+
+For the latest model list, visit [Bailian Model Plaza](https://bailian.console.aliyun.com/).
+
+## Logging
+To output Dashscope logs, you need to configure the logger.
+```shell
+export DASHSCOPE_LOGGING_LEVEL='info'
+
+```
+
+## Output
+The output contains the following fields:
+```
+     request_id (str): The request id.
+     status_code (int): HTTP status code, 200 indicates that the
+         request was successful, others indicate an error.
+     code (str): Error code if error occurs, otherwise empty str.
+     message (str): Set to error message on error.
+     output (Any): The request output.
+     usage (Any): The request usage information.
+```
+
+## License
+This project is licensed under the Apache License (Version 2.0).

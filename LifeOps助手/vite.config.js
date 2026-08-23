@@ -9,6 +9,12 @@ export default defineConfig({
 			'/api': {
 				target: 'http://localhost:8000',
 				changeOrigin: true
+			},
+			// WebSocket 聊天代理（本地开发）
+			'/chat': {
+				target: 'ws://localhost:8000',
+				ws: true,
+				changeOrigin: true
 			}
 		}
 	}

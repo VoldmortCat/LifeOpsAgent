@@ -1,11 +1,14 @@
 // REST API 封装
-const DEFAULT_HOST = 'localhost'
-const DEFAULT_PORT = '8000'
+// 通用适配：默认同源（H5 部署走 nginx 反代、本地开发走 vite proxy），
+// 也可在设置页用 api_host / api_port 覆盖（兼容微信小程序等跨域场景）
+const DEFAULT_HOST = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
+const DEFAULT_PORT = typeof window !== 'undefined' ? (window.location.port || '80') : '8000'
 
 function getBaseUrl() {
 	const host = uni.getStorageSync('api_host') || DEFAULT_HOST
 	const port = uni.getStorageSync('api_port') || DEFAULT_PORT
-	return `http://${host}:${port}`
+	// 80 端口省略端口号
+	return port === '80' ? `http://${host}` : `http://${host}:${port}`
 }
 
 function request(options) {

@@ -1,8 +1,10 @@
 // WebSocket 客户端封装
 // 连接后端 FastAPI WebSocket 服务: ws://host:port/chat/{thread_id}
+// 通用适配：默认同源（部署走 nginx WebSocket 反代、本地开发走 vite proxy），
+// 也可在设置页用 api_host / api_port 覆盖（兼容微信小程序等跨域场景）
 
-const DEFAULT_HOST = 'localhost'
-const DEFAULT_PORT = '8000'
+const DEFAULT_HOST = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
+const DEFAULT_PORT = typeof window !== 'undefined' ? (window.location.port || '80') : '8000'
 
 /**
  * 创建 WebSocket 连接
@@ -13,7 +15,8 @@ const DEFAULT_PORT = '8000'
 export function createWebSocket(threadId, handlers = {}) {
 	const host = uni.getStorageSync('api_host') || DEFAULT_HOST
 	const port = uni.getStorageSync('api_port') || DEFAULT_PORT
-	const url = `ws://${host}:${port}/chat/${threadId}`
+	// 80 端口省略端口号
+	const url = port === '80' ? `ws://${host}/chat/${threadId}` : `ws://${host}:${port}/chat/${threadId}`
 
 	let socket = null
 	let reconnectTimer = null

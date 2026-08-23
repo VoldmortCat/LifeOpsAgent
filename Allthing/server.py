@@ -54,16 +54,6 @@ def _get_router():
     return _router
 
 
-# ====================== 系统配置 API ======================
-
-BAIDU_MAPS_AK = os.environ.get("BAIDU_MAPS_BROWSER_AK", "")
-
-@app.get("/api/config/map-ak")
-def get_map_ak():
-    ak = BAIDU_MAPS_AK or os.environ.get("BAIDU_MAPS_API_KEY", "")
-    return {"ok": True, "ak": ak}
-
-
 # ====================== 用户配置 API ======================
 
 from pydantic import BaseModel
@@ -390,27 +380,7 @@ async def chat_websocket(websocket: WebSocket, thread_id: str):
 
             await websocket.send_json({"type": "thinking", "content": "正在思考..."})
 
-            # 每次请求前清空上一次的 travel 地图数据残留，防止跨请求污染
-            try:
-                from graph.travel_node import _last_travel_map_data
-                import graph.travel_node as tn
-                tn._last_travel_map_data = None
-            except (ImportError, AttributeError):
-                pass
-
             full_text = await asyncio.to_thread(router.route, user_input, thread_id)
-
-            # 检查 Travel Agent 是否生成了地图数据，如果有则先推送地图
-            try:
-                from graph.travel_node import get_travel_map_data
-                map_data = get_travel_map_data()
-                if map_data:
-                    logger.info(f"[WS] Travel map_data: type={map_data.get('type')}, points={len(map_data.get('points',[]))}")
-                    await websocket.send_json({"type": "map_data", "data": map_data})
-                else:
-                    logger.info("[WS] Travel map_data: None (无地图数据)")
-            except Exception as e:
-                logger.warning(f"[WS] Travel map_data 发送异常: {e}")
 
             chunk_size = 3
             for i in range(0, len(full_text), chunk_size):
