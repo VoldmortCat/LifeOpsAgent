@@ -1,0 +1,7 @@
+[start] 2026/08/26 ÖÜÈý 15:11:03.79 
+unknown shorthand flag: 'f' in -f
+
+Usage:  docker [OPTIONS] COMMAND [ARG...]
+
+Run 'docker --help' for more information
+[done] exit=125 

@@ -1,12 +1,17 @@
 """
-知识库检索工具 — 基于本地 Markdown 文件的 RAG
-使用 DashScope text-embedding-v2 向量模型进行语义检索
-支持向量余弦相似度 + 关键词加权 + 标签过滤混合排序
-向量已通过 ChromaDB 持久化到磁盘，避免重复调用 API
+知识库检索工具 — 基于本地 Markdown 文件的 RAG（v3 · Milvus 后端）
+
+检索架构：
+  主路径   Milvus 2.5 服务端混合检索：稠密向量 + 内置中文 BM25 全文检索，
+           WeightedRanker 融合；city(partition key)/价格/场景标签 expr 服务端下推。
+           —— 替代旧版手写 numpy 余弦 + jieba + rank_bm25 流程
+  降级路径 Milvus 不可用时：加载本地 JSON 快照(data/knowledge_snapshot.json)，
+           回退旧版应用层管线（关键词加权检索），保证 RAG 不至于完全瘫痪
+  语义路由 标签向量缓存 + 查询激活（两版共用，见 _route_semantic_tags）
 
 知识库文件格式：Markdown 自然段落，以 ## 标题分隔数据块。
-原始 .md 文件不做结构化清洗——保留自然语言风格。
-标签在导入时自动提取（按预定义词库从全文匹配），不作为原始文件的一部分。
+原始 .md 文件不做结构化清洗。标签导入时按词库自动提取；
+价格区间导入时正则抽取为结构化字段（price_min/max/level）。
 """
 import sys
 import os
@@ -19,11 +24,12 @@ from typing import List, Dict, Optional, Tuple, Set
 from langchain_core.tools import tool
 from dashscope import TextEmbedding
 
-import chromadb
-from chromadb.config import Settings as ChromaSettings
-
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from config.config_loader import config
+try:
+    from tools.knowledge import milvus_store as store
+except Exception:  # 循环依赖防护等极端情况
+    store = None
 
 logger = logging.getLogger("lifeops.knowledge")
 
@@ -43,55 +49,108 @@ _entries_cache: Optional[List[Dict]] = None
 _embeddings_cache: Optional[np.ndarray] = None
 _index_mtime: float = 0
 
-# ===== ChromaDB 客户端（惰性初始化） =====
-_chroma_client: Optional[chromadb.PersistentClient] = None
-_COLLECTION_NAME = "knowledge"
+# ===== Milvus 后端配置 =====
+_MILVUS_URI = config.get("vectordb.uri", "http://127.0.0.1:19530")
+_MILVUS_ENABLED = bool(store and store.is_available())
+
+# ===== 本地快照（Milvus 断连时的降级数据源） =====
+_SNAPSHOT_PATH = Path(config.get("paths.data_dir", "data")) / "knowledge_snapshot.json"
+_BUILD_INFO_PATH = Path(config.get("paths.vectordb_dir", "data/vectordb")) / "build_info.json"
 
 # ===== 标签词库 =====
 # 导入时从段落全文自动匹配这些词作为标签，不改原始文件。
-# 格式：标签名 → 匹配模式列表（取交集不去重；任一命中即打标）
+# 格式：标签名 → 匹配模式列表（任一命中即打标）
+#
+# 词库维护规则（v2 — 修复标签污染）：
+#   1. 禁止单字模式："山"曾把"孙中山"打成自然风光、"虾"曾把"虾饺"(早茶)打成
+#      海鲜、"买"命中一切购物语境。单字一律展开为 ≥2 字的具体词。
+#   2. 禁止泛动词/泛名词："建议""提醒""预约""预算"曾让「攻略」标签几乎全库命中，
+#      失去区分度。只保留内容类型词（攻略/避坑/路线…）。
+#   3. 歧义搭配用短语级模式："凌晨"会误标日出观景段落，改用"开到凌晨"等短语。
+#   4. 区镇类是闭集专有名词，可参与硬过滤；其余类型标签仅作软加分信号，
+#      个性化场景意图由语义标签路由（_route_semantic_tags）负责。
 _TAG_DICT: Dict[str, List[str]] = {
-    # 地区和方位
-    "石岐区": ["石岐", "孙文西路", "白水井", "兴中广场", "凤鸣路", "烟墩山"],
-    "东区": ["东区街道", "长江水世界", "新安村", "库充村", "景观路", "中山三路"],
+    # ----- 地区和方位（闭集专有名词，可做硬过滤）-----
+    "石岐区": ["石岐区", "石岐街道", "石岐老城", "孙文西路", "白水井", "兴中广场", "凤鸣路", "烟墩山", "康华路", "张溪", "莲员东路"],
+    "东区": ["东区街道", "长江水世界", "新安村", "库充村", "景观路", "中山三路", "利和广场", "紫马岭"],
     "南区": ["南区街道", "詹园", "北台村", "树木园", "银潭二路"],
     "西区": ["西区街道", "岐江西岸", "岐江公园"],
-    "沙溪镇": ["沙溪", "隆都", "星宝", "岐江公路乐群"],
-    "三乡镇": ["三乡", "雍陌村", "古鹤村", "泉林", "白石村", "罗三妹"],
-    "坦洲镇": ["坦洲", "大冲口", "坦神北路"],
+    "沙溪镇": ["沙溪", "隆都", "星宝", "岐江公路乐群", "翠景南路"],
+    "三乡镇": ["三乡镇", "三乡", "雍陌村", "古鹤村", "泉林", "白石村", "罗三妹", "南龙村", "东街里"],
+    "坦洲镇": ["坦洲", "大冲口", "坦神北路", "界狮南路", "同明街"],
     "小榄镇": ["小榄", "孖宝庄园", "樱花里"],
-    "古镇镇": ["古镇", "灯都", "灯饰"],
+    "古镇镇": ["古镇镇", "灯都", "灯饰"],
     "南朗街道": ["南朗", "崖口村", "翠亨", "孙中山故居", "孙中山故里", "影视城"],
     "五桂山街道": ["五桂山", "逍遥谷", "旗溪村", "桂南村", "南桥"],
-    "翠亨新区": ["马鞍岛", "翠亨新区", "深中通道", "深中大桥", "湿地公园"],
-    "港口镇": ["港口", "港福路"],
+    "翠亨新区": ["马鞍岛", "翠亨新区", "深中大桥", "湿地公园", "滨海步道"],
+    "港口镇": ["港口镇", "港福路"],
     "黄圃镇": ["黄圃", "腊味", "新丰北"],
-    "东升镇": ["东升", "脆肉鲩"],
-    "火炬开发区": ["火炬"],
+    "东升镇": ["东升镇", "脆肉鲩"],
+    "火炬开发区": ["火炬开发区", "火炬路"],
     "神湾镇": ["神湾", "菠萝"],
-    # 美食类型
-    "乳鸽": ["乳鸽", "鸽子", "妙龄鸽", "盐焗鸽", "药膳鸽", "鸽血"],
-    "早茶": ["早茶", "茶楼", "点心", "虾饺", "金钱肚", "牛仔骨", "凤爪", "烧卖", "茶位"],
-    "海鲜": ["海鲜", "蟹", "虾", "鱼", "生蚝", "贝壳", "海螺", "扇贝", "鱿鱼", "龙虾", "海盐"],
-    "火锅": ["火锅", "涮", "椰子鸡", "砂锅粥"],
-    "烧烤": ["烧烤", "烤肉", "烧鸡", "炭烤", "烤五花", "烤鱼"],
-    "宵夜": ["宵夜", "夜宵", "凌晨", "烧鸡铺", "烤吧", "营地"],
-    "小吃": ["小吃", "濑粉", "肠粉", "云吞", "煲仔饭", "煎堆", "米酒", "粽", "炸鱼球", "炸云吞"],
-    "咖啡": ["咖啡", "手冲", "美式", "冷萃", "拿铁", "咖啡店", "咖啡馆", "咖啡厅"],
-    "异国风味": ["印度", "土耳其", "意大利", "东南亚", "南洋", "咖喱", "披萨", "烤肉拼盘"],
-    # 旅行类型
-    "历史文化": ["博物馆", "故居", "历史", "非遗", "明代", "清代", "古建筑", "华侨", "文塔", "文化馆"],
-    "自然风光": ["山", "公园", "湿地", "森林", "水库", "稻田", "绿道", "树木园", "溪流", "竹海"],
-    "网红打卡": ["打卡", "网红", "小红书", "拍照", "出片", "摩天轮", "稻田咖啡", "电厂工坊", "碉楼"],
+    # ----- 美食类型 -----
+    "乳鸽": ["乳鸽", "鸽子", "妙龄鸽", "盐焗鸽", "药膳鸽", "鸽血", "鸽皇", "鸽肉", "香茅焗鸽"],
+    "早茶": ["早茶", "茶楼", "点心", "虾饺", "金钱肚", "牛仔骨", "凤爪", "烧卖", "茶位", "饮茶", "鸭脚扎"],
+    "海鲜": ["海鲜", "生蚝", "扇贝", "海螺", "贝壳", "鱿鱼", "龙虾", "大闸蟹", "肉蟹", "膏蟹", "醉蟹",
+             "避风塘", "渔村", "渔获", "九节虾", "基围虾", "白灼虾", "海胆", "水产", "河鲜", "海鸭",
+             "鱼生", "鱼片", "蒸鱼", "焖鱼", "鱼头", "鱼嘴", "鱼腩", "脆肉鲩", "笋壳鱼", "桂花鱼",
+             "三文鱼", "烤生蚝", "水鱼"],
+    "火锅": ["火锅", "椰子鸡", "砂锅粥", "打边炉", "鸡煲"],
+    "烧烤": ["烧烤", "烤肉", "烧鸡", "炭烤", "烤五花", "烤鱼", "烤串", "羊肉串", "炭火慢烤", "篝火"],
+    "宵夜": ["宵夜", "夜宵", "深夜", "通宵", "开到凌晨", "营业到凌晨", "烧鸡铺", "烤吧"],
+    "小吃": ["小吃", "濑粉", "肠粉", "云吞", "煲仔饭", "煎堆", "米酒", "芦兜粽", "炸鱼球", "炸云吞",
+             "烧饼", "鸡仔饼", "满足面", "云吞面"],
+    "咖啡": ["咖啡", "手冲", "美式", "冷萃", "拿铁", "咖啡店", "咖啡馆", "咖啡厅", "精酿啤酒"],
+    "异国风味": ["印度", "土耳其", "意大利", "东南亚", "南洋", "披萨", "烤肉拼盘", "日料", "西餐",
+                 "寿司", "意面", "泰国菜", "越南菜", "韩国料理", "异国风情美食街"],
+    # ----- 旅行类型 -----
+    "历史文化": ["博物馆", "故居", "历史", "非遗", "明代", "清代", "清末", "民国", "古建筑", "华侨",
+                 "文塔", "文化馆", "纪念公园", "遗址", "百年老"],
+    # 注：不放裸"公园"——"纪念公园/主题公园"会误标历史类段落；
+    # 真自然场景在语料中均有更强信号（湿地/森林/绿道/水库/日落…）
+    "自然风光": ["湿地", "森林", "水库", "稻田", "绿道", "树木园", "溪流", "竹海", "爬山",
+                 "登山", "郊野", "田园", "观景台", "日出", "日落", "红树林", "候鸟", "徒步", "溯溪",
+                 "天然氧吧", "绿肺"],
+    "网红打卡": ["打卡", "网红", "小红书", "拍照", "出片", "摩天轮", "稻田咖啡", "电厂工坊", "碉楼",
+                 "霸屏"],
     "温泉": ["温泉", "泡池", "泡汤"],
-    "住宿": ["酒店", "民宿", "宾馆", "度假", "住宿", "一晚", "入住"],
-    "交通出行": ["城轨", "自驾", "公交", "深中通道", "跨市公交", "高速", "网约车", "打车", "骑行"],
-    "购物": ["购物", "商圈", "商场", "手信", "特产", "买", "腊味", "杏仁饼", "广场", "百货"],
+    "住宿": ["酒店", "民宿", "宾馆", "度假", "住宿", "入住", "一晚", "客栈", "别墅", "木屋"],
+    "交通出行": ["城轨", "自驾", "公交", "深中通道", "跨市公交", "高速", "网约车", "打车", "骑行",
+                 "停车", "共享单车", "BRT", "码头"],
+    "购物": ["购物", "商圈", "商场", "手信", "特产", "腊味", "杏仁饼", "百货", "伴手礼", "逛街",
+             "购物中心", "卖场", "采购", "广场"],
     "夜市": ["夜市", "夜经济", "酒吧街", "美食街", "不夜城", "宵夜街"],
-    # 主题
-    "攻略": ["攻略", "建议", "避坑", "提醒", "贴士", "最佳时间", "预算", "预约", "行程", "路线"],
-    "亲子": ["亲子", "儿童", "水上乐园", "游乐园", "滑草"],
+    # ----- 主题 -----
+    "攻略": ["攻略", "避坑", "贴士", "最佳时间", "行程", "路线", "注意事项", "怎么玩", "优先级",
+             "防坑", "预算参考"],
+    "亲子": ["亲子", "儿童", "水上乐园", "游乐园", "滑草", "遛娃", "小孩", "家庭出游", "机动游戏"],
     "情侣": ["情侣", "约会", "求婚", "浪漫", "蜜月"],
+}
+
+# ===== 标签语义描述（v3：供语义标签路由向量化用） =====
+# 模式词只覆盖字面命中；语义激活需要"场景化白话描述"，才能接住
+# "带爸妈去玩"->亲子 这类零词汇重叠的意图。区镇是闭集枚举走词面即可，不参与。
+_TAG_DESCRIPTIONS: Dict[str, str] = {
+    "乳鸽": "中山招牌红烧乳鸽妙龄鸽，想吃鸽子禽类菜的场合",
+    "早茶": "广式早茶点心茶楼饮茶虾饺凤爪，一盅两件的早餐",
+    "海鲜": "海鲜水产鱼虾蟹贝生蚝扇贝，吃海味河鲜的场合",
+    "火锅": "打边炉涮锅椰子鸡砂锅粥鸡煲，围炉热乎菜",
+    "烧烤": "炭火烤串烤肉，晚上撸串吃烤物的场合",
+    "宵夜": "深夜营业的大排档夜宵，晚上十点后出门吃东西",
+    "小吃": "本地特色粉面云吞肠粉煲仔饭，街边平价地道小食",
+    "咖啡": "咖啡馆手冲拿铁精品咖啡，坐下来喝一杯歇脚",
+    "异国风味": "外国餐厅东南亚菜日料韩料西餐披萨，换换口味的异国料理",
+    "历史文化": "名人故居博物馆非遗古建筑遗址，有人文故事可看的地方",
+    "自然风光": "山水田园湿地绿道森林徒步，看风景亲近大自然的户外景点",
+    "网红打卡": "出片好看适合拍照分享社交平台的热门地点",
+    "温泉": "温泉度假村泡汤泡池，想泡温泉放松身心",
+    "住宿": "酒店民宿宾馆客栈，外地或过夜要订住的地方",
+    "交通出行": "怎么前往的交通方式城轨公交自驾停车，路上怎么走",
+    "购物": "逛街买特产手信商场超市伴手礼，购物消费的场所",
+    "夜市": "夜市美食街酒吧街，晚上热闹的夜生活街区",
+    "攻略": "实用建议避坑提醒行程规划最佳时间注意事项，出行前要看的经验",
+    "亲子": "适合带小孩孩子爸爸妈妈父母长辈全家老少一起玩的亲子乐园与户外活动",
+    "情侣": "适合情侣两个人约会浪漫求婚纪念日的浪漫去处",
 }
 
 # ===== 城市 → 区镇标签映射（用于判断检索结果是否匹配用户所在城市）=====
@@ -105,82 +164,47 @@ CITY_DISTRICTS = {
 }
 
 
-def _get_chroma() -> chromadb.PersistentClient:
-    global _chroma_client
-    if _chroma_client is None:
-        VECTORDB_DIR.mkdir(parents=True, exist_ok=True)
-        _chroma_client = chromadb.PersistentClient(
-            path=str(VECTORDB_DIR),
-            settings=ChromaSettings(anonymized_telemetry=False),
-        )
-    return _chroma_client
+# ============================================================
+# 本地快照 & 构建信息（Milvus 降级方案）
+# ============================================================
 
-
-def _load_from_chromadb() -> Tuple[Optional[List[Dict]], Optional[np.ndarray], float]:
-    """从 ChromaDB 加载持久化的向量和条目，返回 (entries, embeddings, mtime)"""
+def _save_snapshot(entries: List[Dict], embeddings) -> None:
+    """把全量条目+向量写 JSON 快照，供 Milvus 断连时降级检索用。"""
     try:
-        client = _get_chroma()
-        collection = client.get_collection(_COLLECTION_NAME)
-        count = collection.count()
-        if count == 0:
-            return None, None, 0.0
-
-        all_data = collection.get(include=["documents", "embeddings", "metadatas"])
-        if not all_data["documents"]:
-            return None, None, 0.0
-
-        entries = [json.loads(d) for d in all_data["documents"]]
-        embeddings = np.array(all_data["embeddings"], dtype=np.float32)
-
-        # 合并 metadatas 进 entries（兜底：旧数据可能没有 city 字段）
-        metadatas = all_data.get("metadatas") or []
-        for i, meta in enumerate(metadatas):
-            if i < len(entries) and meta:
-                if not entries[i].get("city"):
-                    entries[i]["city"] = meta.get("city", "未知")
-                if not entries[i].get("category"):
-                    entries[i]["category"] = meta.get("category", "未知")
-
-        col_meta = collection.metadata or {}
-        stored_mtime = col_meta.get("build_mtime", 0.0)
-
-        return entries, embeddings, stored_mtime
-    except Exception:
-        return None, None, 0.0
+        _SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _SNAPSHOT_PATH.write_text(json.dumps({
+            "count": len(entries),
+            "entries": entries,
+            "embeddings": [[float(x) for x in row] for row in embeddings],
+        }, ensure_ascii=False), encoding="utf-8")
+        logger.info("快照已保存: %s (%d 条)", _SNAPSHOT_PATH.name, len(entries))
+    except Exception as e:
+        logger.warning("快照写入失败(不影响主流程): %s", e)
 
 
-def _save_to_chromadb(entries: List[Dict], embeddings: np.ndarray, mtime: float):
-    """将向量和条目持久化到 ChromaDB"""
-    client = _get_chroma()
-
+def _load_snapshot() -> Tuple[Optional[List[Dict]], Optional["np.ndarray"]]:
+    """读取降级快照。不存在返回 (None, None)。"""
     try:
-        client.delete_collection(_COLLECTION_NAME)
+        data = json.loads(_SNAPSHOT_PATH.read_text(encoding="utf-8"))
+        import numpy as np
+        return data["entries"], np.array(data["embeddings"], dtype=np.float32)
     except Exception:
-        pass
+        return None, None
 
-    collection = client.create_collection(
-        _COLLECTION_NAME,
-        metadata={"build_mtime": mtime, "dimension": EMBEDDING_DIM},
-    )
 
-    batch_size = 100
-    for i in range(0, len(entries), batch_size):
-        batch_end = min(i + batch_size, len(entries))
-        # 构建 metadatas：把 city/category 等 frontmatter 字段存进去，支持检索时 where 前置过滤
-        metadatas = []
-        for e in entries[i:batch_end]:
-            meta = {
-                "city": e.get("city", "未知"),
-                "category": e.get("category", "未知"),
-                "source_file": e.get("source_file", ""),
-            }
-            metadatas.append(meta)
-        collection.add(
-            ids=[f"entry_{j}" for j in range(i, batch_end)],
-            embeddings=embeddings[i:batch_end].tolist(),
-            documents=[json.dumps(e, ensure_ascii=False) for e in entries[i:batch_end]],
-            metadatas=metadatas,
-        )
+def _read_build_info() -> Dict:
+    try:
+        return json.loads(_BUILD_INFO_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _write_build_info(mtime: float) -> None:
+    try:
+        _BUILD_INFO_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _BUILD_INFO_PATH.write_text(json.dumps({"build_mtime": mtime}), encoding="utf-8")
+    except Exception as e:
+        logger.warning("构建信息写入失败: %s", e)
 
 
 def _read_frontmatter(filepath: str) -> Dict[str, str]:
@@ -220,22 +244,104 @@ def _read_frontmatter(filepath: str) -> Dict[str, str]:
     return meta
 
 
+# 标签匹配模式的最短长度防线：单字子串匹配是标签污染的主要来源
+# （"山"命中"孙中山"、"虾"命中"虾饺"、"鱼"命中一切），低于此长度的模式直接跳过
+MIN_TAG_PATTERN_LEN = 2
+
+
 def _extract_tags(title: str, content: str) -> List[str]:
     """
     从段落全文（标题 + 正文）中按预定义词库匹配标签。
     不改原始文件，仅在导入时自动提取。
     返回去重的标签列表。
+
+    防线：< MIN_TAG_PATTERN_LEN 的模式会被跳过并记警告，
+    保证词库维护失误（混入单字模式）不会重新引入标签污染。
     """
     full_lower = (title + " " + content).lower()
     matched_tags: Set[str] = set()
 
     for tag_name, patterns in _TAG_DICT.items():
         for pattern in patterns:
+            if len(pattern) < MIN_TAG_PATTERN_LEN:
+                logger.warning("标签[%s]的模式'%s'长度<%d，已跳过（防污染）",
+                               tag_name, pattern, MIN_TAG_PATTERN_LEN)
+                continue
             if pattern.lower() in full_lower:
                 matched_tags.add(tag_name)
                 break  # 一个标签只加一次
 
     return sorted(matched_tags)
+
+
+# ============================================================
+# 价格结构化抽取（v2 新增）
+# ============================================================
+# 从段落文本中抽取人均消费区间，作为可过滤的结构化字段。
+# 只认"人均"语境——单菜价格（"乳鸽80元一只"）不代表消费档位，不参与。
+# 抽不到时 price_min/price_max 为 None，检索时按"未知"处理，不会被价格过滤误杀。
+
+_RE_PRICE_RANGE = re.compile(r"人均[^0-9]{0,4}(\d{1,4})\s*(?:到|至|-|~|—)\s*(\d{1,4})")
+_RE_PRICE_SINGLE = re.compile(r"人均[^0-9]{0,4}(\d{1,4})")
+# scene_guide 风格："人均预算：15-35元" / "人均<30元"
+_RE_PRICE_BUDGET = re.compile(r"人均预算[:：]\s*(\d{1,4})\s*(?:[-~到至—]\s*(\d{1,4}))?")
+_RE_PRICE_LT = re.compile(r"人均[<＜]\s*(\d{1,4})")
+
+# 人均档位：0=未知 1=省钱(≤35) 2=日常(35<x≤90) 3=高端(>90)
+PRICE_LEVEL_UNKNOWN = 0
+PRICE_LEVEL_BUDGET_MAX = 35
+PRICE_LEVEL_MID_MAX = 90
+
+
+def _price_level(price_min: Optional[int], price_max: Optional[int]) -> int:
+    """根据人均区间推导消费档位。"""
+    if price_min is None and price_max is None:
+        return PRICE_LEVEL_UNKNOWN
+    lo = price_min if price_min is not None else price_max
+    hi = price_max if price_max is not None else price_min
+    avg = (lo + hi) / 2
+    if avg <= PRICE_LEVEL_BUDGET_MAX:
+        return 1
+    if avg <= PRICE_LEVEL_MID_MAX:
+        return 2
+    return 3
+
+
+def _extract_price(text: str) -> Tuple[Optional[int], Optional[int]]:
+    """
+    从段落文本抽取人均消费区间 (price_min, price_max)。
+
+    支持写法：
+      人均80到120 / 人均50多 / 人均75左右 / 人均30-50块
+      人均预算：15-35元 / 人均<30元
+    多处命中时取并集（min 取最小、max 取最大），适配一段介绍多家店的块。
+    """
+    mins: List[int] = []
+    maxs: List[int] = []
+
+    for m in _RE_PRICE_RANGE.finditer(text):
+        mins.append(int(m.group(1)))
+        maxs.append(int(m.group(2)))
+
+    for regex in (_RE_PRICE_BUDGET, _RE_PRICE_SINGLE):
+        for m in regex.finditer(text):
+            v = int(m.group(1))
+            if m.lastindex and m.lastindex >= 2 and m.group(2):
+                mins.append(v)
+                maxs.append(int(m.group(2)))
+            else:
+                # 单点值：视为 min=max（如"人均50多"、"人均75左右"）
+                mins.append(v)
+                maxs.append(v)
+
+    for m in _RE_PRICE_LT.finditer(text):
+        # "人均<30"是上限语义：min 视为 0
+        mins.append(0)
+        maxs.append(int(m.group(1)))
+
+    if not mins:
+        return None, None
+    return min(mins), max(maxs)
 
 
 def _parse_blocks(filepath: str, category: str, rel_path: str) -> List[Dict]:
@@ -297,6 +403,9 @@ def _parse_blocks(filepath: str, category: str, rel_path: str) -> List[Dict]:
         # 自动提取标签
         tags = _extract_tags(title, content_text)
 
+        # 抽取人均消费区间（结构化字段，支持按预算过滤）
+        price_min, price_max = _extract_price(full_text)
+
         blocks.append({
             "title": title,
             "content": content_text,
@@ -305,16 +414,40 @@ def _parse_blocks(filepath: str, category: str, rel_path: str) -> List[Dict]:
             "city": file_city,
             "source_file": rel_path,
             "full_text": full_text,
+            "price_min": price_min,
+            "price_max": price_max,
+            "price_level": _price_level(price_min, price_max),
         })
 
     return blocks
 
 
+def _parse_all_blocks() -> Tuple[List[Dict], List[str]]:
+    """扫描 knowledge_base/ 全部 .md 并分块解析。返回 (entries, 待向量化文本)。"""
+    entries, texts = [], []
+    for root, _, files in os.walk(KNOWLEDGE_DIR):
+        for f in sorted(files):
+            if not f.endswith(".md") or f.startswith("."):
+                continue
+            filepath = os.path.join(root, f)
+            rel_path = os.path.relpath(filepath, KNOWLEDGE_DIR)
+            category = os.path.basename(root)
+            for block in _parse_blocks(filepath, category, rel_path):
+                entries.append(block)
+                texts.append(block["full_text"])
+    return entries, texts
+
+
 def _build_index() -> Tuple[List[Dict], np.ndarray]:
     """
     扫描 knowledge_base/ 下所有 .md 文件，按 ## 分块解析段落并生成向量。
-    优先从 ChromaDB 加载持久化数据，仅在文件更新或首次运行时调用 API。
-    返回 (条目列表, 向量矩阵)
+
+    存储优先级：
+      1. Milvus（主）：新鲜则 load_all；过期则重建并全量写入
+      2. 本地 JSON 快照（降级）：Milvus 不可用时只读，保证 RAG 不瘫痪
+      3. 纯解析兜底：连快照都没有时返回无向量条目，检索走关键词路径
+
+    返回 (条目列表, 向量矩阵)——向量矩阵可能为空 (0, DIM)，调用方需容忍。
     """
     global _entries_cache, _embeddings_cache, _index_mtime
 
@@ -331,46 +464,54 @@ def _build_index() -> Tuple[List[Dict], np.ndarray]:
     if _entries_cache is not None and _embeddings_cache is not None and latest_mtime <= _index_mtime:
         return _entries_cache, _embeddings_cache
 
-    # 3. 尝试从 ChromaDB 加载（文件未更新时生效）
-    if latest_mtime > 0:
-        db_entries, db_embeddings, db_mtime = _load_from_chromadb()
-        if db_entries is not None and db_mtime >= latest_mtime:
-            _entries_cache = db_entries
-            _embeddings_cache = db_embeddings
-            _index_mtime = db_mtime
-            return db_entries, db_embeddings
+    # 3. Milvus 主路径
+    if _MILVUS_ENABLED:
+        try:
+            client = store.get_client(_MILVUS_URI)
+            store.ensure_collection(client)
+            cnt = store.count(client)
+            db_mtime = float(_read_build_info().get("build_mtime", 0.0))
 
-    # 4. 文件有更新或 ChromaDB 为空 → 重新构建
-    entries = []
-    texts_to_embed = []
+            if cnt > 0 and latest_mtime > 0 and db_mtime >= latest_mtime:
+                # 新鲜：直接加载
+                entries, vectors = store.load_all(client)
+                emb = np.array(vectors, dtype=np.float32) if vectors else np.empty((0, EMBEDDING_DIM))
+                _entries_cache, _embeddings_cache, _index_mtime = entries, emb, db_mtime
+                logger.info("Milvus 命中: %d 条", len(entries))
+                return entries, emb
 
-    for root, _, files in os.walk(KNOWLEDGE_DIR):
-        for f in sorted(files):
-            if not f.endswith(".md") or f.startswith("."):
-                continue
-            filepath = os.path.join(root, f)
-            rel_path = os.path.relpath(filepath, KNOWLEDGE_DIR)
-            category = os.path.basename(root)
+            # 过期或为空 → 重建
+            entries, texts_to_embed = _parse_all_blocks()
+            embeddings = _batch_embed(texts_to_embed) if texts_to_embed else np.empty((0, EMBEDDING_DIM))
+            if len(embeddings):
+                norms = np.linalg.norm(embeddings, axis=1, keepdims=True) + 1e-8
+                embeddings = embeddings / norms  # 单位化后 IP == 余弦
+            if entries:
+                store.drop_collection(client)
+                store.ensure_collection(client)
+                n = store.insert_entries(client, entries, embeddings)
+                _write_build_info(latest_mtime)
+                _save_snapshot(entries, embeddings)
+                logger.info("Milvus 重建完成: %d 条", n)
+            _entries_cache, _embeddings_cache, _index_mtime = entries, embeddings, latest_mtime
+            return entries, embeddings
+        except Exception as e:
+            logger.warning("Milvus 主路径不可用(%s: %s)，尝试快照降级",
+                           type(e).__name__, e)
 
-            blocks = _parse_blocks(filepath, category, rel_path)
-            for block in blocks:
-                entries.append(block)
-                texts_to_embed.append(block["full_text"])
+    # 4. 快照降级 / 首次构建兜底
+    snap_entries, snap_emb = _load_snapshot()
+    if snap_entries:
+        _entries_cache, _embeddings_cache, _index_mtime = snap_entries, snap_emb, latest_mtime
+        logger.warning("已降级到本地快照: %d 条", len(snap_entries))
+        return snap_entries, snap_emb
 
-    # 5. 调 API 生成向量
-    if texts_to_embed:
-        embeddings = _batch_embed(texts_to_embed)
-    else:
-        embeddings = np.empty((0, EMBEDDING_DIM))
-
-    # 6. 持久化到 ChromaDB
-    if entries:
-        _save_to_chromadb(entries, embeddings, latest_mtime)
-
+    # 5. 无任何持久化数据 → 解析出结构化条目（无向量，走关键词检索路径）
+    entries, _texts = _parse_all_blocks()
     _entries_cache = entries
-    _embeddings_cache = embeddings
+    _embeddings_cache = np.empty((0, EMBEDDING_DIM))
     _index_mtime = latest_mtime
-    return entries, embeddings
+    return entries, _embeddings_cache
 
 
 # ============================================================
@@ -400,12 +541,97 @@ def _batch_embed(texts: List[str]) -> np.ndarray:
 # 检索策略
 # ============================================================
 
+# ===== 语义标签路由（v2 新增）=====
+# 解决"个性化标签无法词面匹配"的问题：用户问"带爸妈去哪玩"和标签「亲子」零词汇重叠。
+# 做法：给每个标签本身算一个 embedding（导入侧一次，进程内缓存），
+# 查询时复用同一个查询向量算余弦，超过阈值的标签被"激活"，参与软加分与两段式过滤。
+# 成本：~40 个标签 × 查询向量，纯 numpy 点积，可忽略。
+
+# 激活阈值：text-embedding-v2 中文相关语义的余弦大多在 0.35~0.6 区间，
+# 0.45 为保守起点——过高会漏激活（路由失效），过低会激活无关标签（加分变噪音）。可按日志调优。
+TAG_SEMANTIC_THRESHOLD = 0.38   # 校准：真语义对地板≈0.40，噪声天花板≈0.27（7例实测，偏召回）
+TAG_ROUTE_TOP_N = 4          # 单次查询最多激活的标签数
+_TAG_VEC_CACHE: Optional[Tuple[List[str], Optional[np.ndarray]]] = None
+_QUERY_EMB_CACHE: Dict[str, np.ndarray] = {}
+_QUERY_EMB_CACHE_MAX = 128
+
+
+def _embed_query_cached(query: str) -> Optional[np.ndarray]:
+    """查询向量化（带进程内缓存）。同一次检索里主排序与标签路由共用同一个向量，
+    不产生额外 API 调用。失败返回 None。"""
+    cached = _QUERY_EMB_CACHE.get(query)
+    if cached is not None:
+        return cached
+    try:
+        resp = TextEmbedding.call(model=EMBEDDING_MODEL, input=[query])
+        if resp.status_code != 200:
+            logger.warning("查询向量化失败: %s", resp.message)
+            return None
+        vec = np.array(resp.output["embeddings"][0]["embedding"], dtype=np.float32)
+    except Exception as e:
+        logger.warning("查询向量化异常: %s", e)
+        return None
+    if len(_QUERY_EMB_CACHE) >= _QUERY_EMB_CACHE_MAX:
+        _QUERY_EMB_CACHE.clear()  # 简单防膨胀；正常会话内不同 query 数量有限
+    _QUERY_EMB_CACHE[query] = vec
+    return vec
+
+
+def _tag_gloss_text(tag_name: str) -> str:
+    """标签的向量化文本。v3 教训：纯模式词与口语化查询零词汇重叠，
+    余弦塌到 0.2x 区间无法激活；改用场景化白话描述为主、少量代表词落地为辅。"""
+    desc = _TAG_DESCRIPTIONS.get(tag_name)
+    if desc:
+        patterns = _TAG_DICT.get(tag_name, [])
+        return f"{tag_name}：{desc}（{'、'.join(patterns[:3])}）"
+    # 区镇等无描述标签：退回模式词
+    return f"{tag_name} " + " ".join(_TAG_DICT.get(tag_name, [])[:8])
+
+
+def _get_tag_matrix() -> Tuple[List[str], Optional[np.ndarray]]:
+    """惰性构建标签向量矩阵（每行已归一化）。API 失败时返回 (names, None)。"""
+    global _TAG_VEC_CACHE
+    if _TAG_VEC_CACHE is not None:
+        return _TAG_VEC_CACHE
+    names = list(_TAG_DICT.keys())
+    try:
+        matrix = _batch_embed([_tag_gloss_text(n) for n in names])
+        norms = np.linalg.norm(matrix, axis=1, keepdims=True) + 1e-8
+        _TAG_VEC_CACHE = (names, matrix / norms)
+        logger.info("语义标签路由就绪：%d 个标签向量", len(names))
+    except Exception as e:
+        logger.warning("标签向量构建失败，语义路由降级关闭: %s", e)
+        _TAG_VEC_CACHE = (names, None)
+    return _TAG_VEC_CACHE
+
+
+def _route_semantic_tags(query_vec: Optional[np.ndarray]) -> List[Tuple[str, float]]:
+    """
+    语义标签路由：query 向量 vs 全部标签向量，返回激活的 [(tag, score)]。
+    未过阈值的标签不返回。查询向量为 None 或标签矩阵不可用时返回 []。
+    """
+    if query_vec is None:
+        return []
+    names, matrix = _get_tag_matrix()
+    if matrix is None or len(names) == 0:
+        return []
+    qn = query_vec / (np.linalg.norm(query_vec) + 1e-8)
+    scores = matrix @ qn
+    order = np.argsort(scores)[::-1]
+    out: List[Tuple[str, float]] = []
+    for i in order[:TAG_ROUTE_TOP_N]:
+        s = float(scores[i])
+        if s >= TAG_SEMANTIC_THRESHOLD:
+            out.append((names[int(i)], round(s, 4)))
+    return out
+
+
 def _vector_search(query: str, entries: List[Dict], emb_matrix: np.ndarray, top_k: int) -> List[Tuple[Dict, float]]:
     """向量语义检索：query 向量化 → 余弦相似度 → 取 top_k"""
-    resp = TextEmbedding.call(model=EMBEDDING_MODEL, input=[query])
-    if resp.status_code != 200:
-        raise RuntimeError(f"查询向量化失败: {resp.message}")
-    query_vec = np.array(resp.output["embeddings"][0]["embedding"], dtype=np.float32)
+    # v2: 改用带缓存的查询向量（与语义标签路由共享，省一次 API 调用）
+    query_vec = _embed_query_cached(query)
+    if query_vec is None:
+        raise RuntimeError("查询向量化失败")
 
     query_norm = query_vec / (np.linalg.norm(query_vec) + 1e-8)
     doc_norms = emb_matrix / (np.linalg.norm(emb_matrix, axis=1, keepdims=True) + 1e-8)
@@ -474,6 +700,91 @@ def _extract_query_tags(query: str) -> List[str]:
     return matched
 
 
+def _milvus_rank(query: str, city: str, max_price: int, max_results: int) -> List[Dict]:
+    """
+    Milvus 主检索路径：服务端混合检索(稠密+中文BM25) + 应用层精排。
+
+    返回与 _hybrid_search 完全同构的 ranked 列表（含 _score/_vector_score/
+    _kw_boost/_tag_boost/_sem_tag_boost/_scenario_filtered/_semantic_tags），
+    下游城市匹配/置信度/输出逻辑零改动复用。
+    失败抛异常由调用方降级到旧管线。
+    """
+    client = store.get_client(_MILVUS_URI)
+    qvec = _embed_query_cached(query)
+    if qvec is None:
+        raise RuntimeError("查询向量化失败")
+
+    # 语义标签路由（与主检索共用同一个查询向量，零额外 API 成本）
+    sem_tags = _route_semantic_tags(qvec)
+    sem_tag_names = [t for t, _ in sem_tags]
+
+    expr = store.build_filter(city=city, max_price=max_price)
+    limit = max(max_results * 2, 10)
+    hits = store.hybrid_search(client, query,
+                               [float(x) for x in qvec], expr, limit)
+
+    keywords = re.split(r"[\s,，、]+", query.strip())
+    keywords = [k for k in keywords if k]
+    query_tags = _extract_query_tags(query)
+
+    qn = qvec / (np.linalg.norm(qvec) + 1e-8)
+    results = []
+    for ent in hits:
+        dvec = ent.pop("_dense_vec", None)
+        ent.pop("_fused_score", None)
+
+        # 服务端融合只负责排序；置信度沿用旧版余弦语义（本地精确计算）
+        vec_score = 0.0
+        if dvec:
+            dv = np.array(dvec, dtype=np.float32)
+            vec_score = float(np.dot(dv / (np.linalg.norm(dv) + 1e-8), qn))
+
+        kw_boost = _keyword_boost(ent, keywords) if keywords else 0.0
+        tg_boost = _tag_boost(ent.get("tags", []), query_tags) if query_tags else 0.0
+        sem_boost = _semantic_tag_boost(ent.get("tags", []), sem_tag_names)
+        final = vec_score + kw_boost + tg_boost + sem_boost
+
+        r = dict(ent)
+        r["_vector_score"] = round(vec_score, 4)
+        r["_kw_boost"] = round(kw_boost, 4)
+        r["_tag_boost"] = round(tg_boost, 4)
+        r["_sem_tag_boost"] = round(sem_boost, 4)
+        r["_score"] = round(final, 4)
+        results.append(r)
+
+    results.sort(key=lambda x: x["_score"], reverse=True)
+    if not results or results[0]["_score"] < CONFIDENCE_THRESHOLD:
+        return []
+
+    # 两段式：优先命中激活场景的结果；覆盖不足自动放弃（防零召回）
+    scenario_applied = False
+    if sem_tag_names:
+        act = set(sem_tag_names)
+        covered = [x for x in results if set(x.get("tags", [])) & act]
+        if len(covered) >= min(max_results, 3):
+            results = covered
+            scenario_applied = True
+
+    top = results[:max_results]
+    for r in top:
+        r["_scenario_filtered"] = scenario_applied
+        r["_semantic_tags"] = [{"tag": t, "score": s} for t, s in sem_tags]
+    return top
+
+
+def _semantic_tag_boost(entry_tags: List[str], sem_tag_names: List[str]) -> float:
+    """
+    语义激活标签的软加分。比词面标签匹配（0.15/个）更轻——语义激活带有不确定性，
+    只做排序微调，不喧宾夺主。
+    """
+    if not sem_tag_names or not entry_tags:
+        return 0.0
+    overlap = len(set(t.lower() for t in entry_tags) & set(s.lower() for s in sem_tag_names))
+    if overlap > 0:
+        return min(overlap * 0.08, 0.24)
+    return 0.0
+
+
 def _hybrid_search(
     query: str, entries: List[Dict], emb_matrix: np.ndarray, max_results: int
 ) -> List[Dict]:
@@ -481,10 +792,12 @@ def _hybrid_search(
     混合检索：
     1. 向量语义相似度（主排序）
     2. 关键词全文 + 标签命中加权（辅）
-    3. 查询标签与条目标签交集加分（精准对齐）
-    4. 置信度阈值过滤
+    3. 词面查询标签交集加分（精准对齐）
+    4. 语义标签路由：激活场景标签 → 软加分 + 两段式场景过滤（覆盖不足自动放弃，防零召回）
+    5. 置信度阈值过滤
 
-    返回的每个条目带 _score / _vector_score / _kw_boost / _tag_boost 字段。
+    返回的每个条目带 _score / _vector_score / _kw_boost / _tag_boost /
+    _sem_tag_boost / _scenario_filtered / _semantic_tags 字段。
     """
     keywords = re.split(r"[\s,，、]+", query.strip())
     keywords = [k for k in keywords if k]
@@ -496,16 +809,27 @@ def _hybrid_search(
     except Exception:
         return _keyword_only_search(entries, keywords, max_results)
 
+    # ===== v2: 语义标签路由（复用主检索的同一个查询向量，零额外 API 成本）=====
+    sem_tags: List[Tuple[str, float]] = []
+    try:
+        qvec = _embed_query_cached(query)
+        sem_tags = _route_semantic_tags(qvec)
+    except Exception as e:
+        logger.debug("语义标签路由异常（不影响主流程）: %s", e)
+    sem_tag_names = [t for t, _ in sem_tags]
+
     results = []
     for entry, vec_score in candidates:
         kw_boost = _keyword_boost(entry, keywords) if keywords else 0.0
         tg_boost = _tag_boost(entry.get("tags", []), query_tags) if query_tags else 0.0
-        final_score = vec_score + kw_boost + tg_boost
+        sem_boost = _semantic_tag_boost(entry.get("tags", []), sem_tag_names)
+        final_score = vec_score + kw_boost + tg_boost + sem_boost
 
         result = dict(entry)
         result["_vector_score"] = round(vec_score, 4)
         result["_kw_boost"] = round(kw_boost, 4)
         result["_tag_boost"] = round(tg_boost, 4)
+        result["_sem_tag_boost"] = round(sem_boost, 4)
         result["_score"] = round(final_score, 4)
         results.append(result)
 
@@ -514,7 +838,21 @@ def _hybrid_search(
     if not results or results[0]["_score"] < CONFIDENCE_THRESHOLD:
         return []
 
-    return results[:max_results]
+    # ===== v2 两段式：优先返回命中激活场景的条目；覆盖不足则整体放弃过滤 =====
+    scenario_applied = False
+    if sem_tag_names:
+        act = set(sem_tag_names)
+        covered = [r for r in results if set(r.get("tags", [])) & act]
+        need = min(max_results, 3)
+        if len(covered) >= need:
+            results = covered
+            scenario_applied = True
+
+    top = results[:max_results]
+    for r in top:
+        r["_scenario_filtered"] = scenario_applied
+        r["_semantic_tags"] = [{"tag": t, "score": s} for t, s in sem_tags]
+    return top
 
 
 def _keyword_only_search(entries: List[Dict], keywords: List[str], max_results: int) -> List[Dict]:
@@ -564,7 +902,9 @@ def _monotonic_ms() -> float:
 _RAG_LOG_PATH = Path("data/monitoring/rag_detail.log")
 
 
-def _log_rag_query(query: str, ranked: list, latency_ms: float):
+def _log_rag_query(query: str, ranked: list, latency_ms: float,
+                   routing_info: Optional[dict] = None,
+                   price_filter_applied: bool = False):
     """详细记录每次 RAG 检索到 TXT + RAGMonitor。"""
     import time as _time
     from datetime import datetime as _datetime
@@ -578,7 +918,12 @@ def _log_rag_query(query: str, ranked: list, latency_ms: float):
             f.write("=" * 80 + "\n")
             f.write(f"[{now_str}] 查询: {query}\n")
             f.write(f"耗时: {latency_ms:.1f} ms | 命中数: {len(ranked)} | "
-                    f"阈值: {CONFIDENCE_THRESHOLD}\n")
+                    f"阈值: {CONFIDENCE_THRESHOLD}"
+                    + (" | 价格过滤" if price_filter_applied else "") + "\n")
+            if routing_info:
+                acts = ", ".join(f"{t}({s})" for t, s in routing_info.get("activated", []))
+                f.write(f"语义路由: 激活[{acts}] "
+                        f"场景过滤={'生效' if routing_info.get('scenario_filtered') else '未生效(覆盖不足)'}\n")
             f.write("-" * 80 + "\n")
 
             if not ranked:
@@ -624,7 +969,8 @@ def _log_rag_query(query: str, ranked: list, latency_ms: float):
 
 
 @tool
-def search_knowledge(query: str, max_results: int = 6, city: str = "", mode: str = "vector") -> str:
+def search_knowledge(query: str, max_results: int = 6, city: str = "",
+                     max_price: int = 0, mode: str = "vector") -> str:
     """
     在本地知识库中搜索中山美食/旅行/景点/住宿/交通/购物经验（向量语义检索）。
     这是本地经验库的首要检索工具。当用户询问以下任一类问题时，必须优先使用：
@@ -638,15 +984,22 @@ def search_knowledge(query: str, max_results: int = 6, city: str = "", mode: str
 
     **重要**：务必传入 city 参数（用户的默认城市），系统会标注每条结果是否匹配该城市。
     如果大量结果 city_match 为 false，说明知识库中缺少该城市的数据，应如实告知用户。
+    当用户表达预算约束（"月底没钱""人均50以内""省钱吃法"）时，传入 max_price（元/人）。
+
+    系统内置语义场景路由：像"带爸妈去哪玩""约会去哪""周末遛弯"这类个性化意图，
+    会自动激活对应场景标签（亲子/情侣/网红打卡等）参与排序与筛选，无需额外参数。
 
     Args:
         query: 搜索关键词或自然语言描述，如"中山一日游路线"、"推荐好吃的乳鸽"
         max_results: 最大返回条数，默认6
         city: 用户当前所在城市，如"中山"、"梅州"。用于标注结果是否属于该城市
+        max_price: 人均消费上限（元）。0 表示不限制。按结构化 price_min 字段前置过滤，
+                   价格未知的条目会保留。如月底省钱场景传 30~35
         mode: 检索模式。"vector"=纯向量检索（默认），"hybrid"=BM25+向量混合检索
 
     Returns:
-        JSON 格式搜索结果，含 city_match_summary（城市匹配概况）和每条结果的 city_match 标注
+        JSON 格式搜索结果，含 city_match_summary（城市匹配概况）、semantic_routing
+        （语义场景路由详情）和每条结果的 city_match / price 标注
     """
     _t0 = _monotonic_ms()
 
@@ -655,45 +1008,79 @@ def search_knowledge(query: str, max_results: int = 6, city: str = "", mode: str
     if not entries:
         return json.dumps({"error": "知识库为空，请先导入数据", "total": 0}, ensure_ascii=False)
 
-    # ===== 前置过滤：按 city 字段过滤 entries（基于 frontmatter 显式标注） =====
-    # 只保留 city 匹配的条目 + city="未知"的条目（旧数据兜底，不误杀）
-    if city:
-        filtered_indices = [
-            i for i, e in enumerate(entries)
-            if e.get("city", "未知") == city or e.get("city", "未知") == "未知"
-        ]
-        if filtered_indices and len(filtered_indices) < len(entries):
-            entries = [entries[i] for i in filtered_indices]
-            emb_matrix = emb_matrix[filtered_indices]
-
-    ranked = _hybrid_search(query, entries, emb_matrix, max_results)
-
-    # ===== BM25 混合检索模式（覆盖 vector 检索结果） =====
-    if mode == "hybrid":
+    # ===== v3: Milvus 主路径（服务端混合检索 + expr 下推过滤） =====
+    ranked: Optional[List[Dict]] = None
+    price_filter_applied = False
+    if _MILVUS_ENABLED:
         try:
-            from tools.knowledge.hybrid_retriever import BM25HybridRetriever, is_bm25_available
-            if is_bm25_available():
-                retriever = BM25HybridRetriever(entries, emb_matrix)
-                bm25_fused = retriever.search(query, top_k=max_results, candidate_k=20)
-
-                # 将 BM25 融合结果转为与 _hybrid_search 相同的格式
-                ranked_hybrid = []
-                for idx, rrf_score in bm25_fused:
-                    entry = dict(entries[idx])
-                    entry["_vector_score"] = 0.0
-                    entry["_kw_boost"] = 0.0
-                    entry["_tag_boost"] = 0.0
-                    entry["_score"] = round(rrf_score, 4)  # 线性融合得分已在 [0, 1] 范围
-                    ranked_hybrid.append(entry)
-                ranked = ranked_hybrid
-                logger.debug("BM25 混合检索: %d 条结果", len(ranked))
-            else:
-                logger.warning("BM25 依赖未安装，回退到纯向量检索")
+            ranked = _milvus_rank(query, city, max_price, max_results)
+            price_filter_applied = bool(max_price and max_price > 0)
+            logger.debug("Milvus 路径: %d 条结果", len(ranked))
         except Exception as e:
-            logger.warning("BM25 混合检索异常: %s，回退到纯向量检索", e)
+            logger.warning("Milvus 检索失败(%s: %s)，降级应用层管线",
+                           type(e).__name__, e)
+            ranked = None
+
+    # ===== 降级路径：旧版应用层管线（Milvus 不可用时的兜底） =====
+    if ranked is None:
+        # 前置过滤：按 city 字段过滤 entries（基于 frontmatter 显式标注）
+        # 只保留 city 匹配的条目 + city="未知"的条目（旧数据兜底，不误杀）
+        if city:
+            filtered_indices = [
+                i for i, e in enumerate(entries)
+                if e.get("city", "未知") == city or e.get("city", "未知") == "未知"
+            ]
+            if filtered_indices and len(filtered_indices) < len(entries):
+                entries = [entries[i] for i in filtered_indices]
+                emb_matrix = emb_matrix[filtered_indices]
+
+        # 前置过滤：按人均预算过滤（v2 结构化 price_min 字段）
+        # 价格未知的条目保留（与 city="未知" 同一兜底哲学：不因信息缺失而误杀）
+        if max_price and max_price > 0:
+            filtered_indices = [
+                i for i, e in enumerate(entries)
+                if e.get("price_min") is None or (e.get("price_min") or 0) <= max_price
+            ]
+            if filtered_indices and len(filtered_indices) < len(entries):
+                entries = [entries[i] for i in filtered_indices]
+                emb_matrix = emb_matrix[filtered_indices]
+                price_filter_applied = True
+
+        ranked = _hybrid_search(query, entries, emb_matrix, max_results)
+
+        # BM25 混合检索模式（旧版可选；仅降级管线有效，Milvus 路径已内置 BM25）
+        if mode == "hybrid":
+            try:
+                from tools.knowledge.hybrid_retriever import BM25HybridRetriever, is_bm25_available
+                if is_bm25_available():
+                    retriever = BM25HybridRetriever(entries, emb_matrix)
+                    bm25_fused = retriever.search(query, top_k=max_results, candidate_k=20)
+
+                    ranked_hybrid = []
+                    for idx, rrf_score in bm25_fused:
+                        entry = dict(entries[idx])
+                        entry["_vector_score"] = 0.0
+                        entry["_kw_boost"] = 0.0
+                        entry["_tag_boost"] = 0.0
+                        entry["_score"] = round(rrf_score, 4)
+                        ranked_hybrid.append(entry)
+                    ranked = ranked_hybrid
+                    logger.debug("BM25 混合检索: %d 条结果", len(ranked))
+                else:
+                    logger.warning("BM25 依赖未安装，回退到纯向量检索")
+            except Exception as e:
+                logger.warning("BM25 混合检索异常: %s，回退到纯向量检索", e)
 
     _latency_ms = _monotonic_ms() - _t0
-    _log_rag_query(query, ranked, _latency_ms)
+
+    # 提取语义路由信息（由 _hybrid_search 附着在结果上）
+    routing_info = None
+    if ranked and ranked[0].get("_semantic_tags"):
+        routing_info = {
+            "activated": [(d["tag"], d["score"]) for d in ranked[0]["_semantic_tags"]],
+            "scenario_filtered": bool(ranked[0].get("_scenario_filtered")),
+        }
+    _log_rag_query(query, ranked, _latency_ms, routing_info, price_filter_applied)
 
     # ===== 城市匹配检测（双层：frontmatter city 字段优先，tags 区镇兜底） =====
     target_districts = set()
@@ -760,11 +1147,22 @@ def search_knowledge(query: str, max_results: int = 6, city: str = "", mode: str
             level = "low"
             label = "低于阈值"
 
+        # 人均消费档位标注（v2 结构化字段）
+        _pmin, _pmax = e.get("price_min"), e.get("price_max")
+        _plevel = e.get("price_level") or 0
+        price_info = {
+            "min": _pmin,
+            "max": _pmax,
+            "level": _plevel,
+            "label": {0: "未知", 1: "省钱档(≤35/人)", 2: "日常档(36-90/人)", 3: "高端档(>90/人)"}.get(_plevel, "?"),
+        }
+
         result_entry = {
             "title": e.get("title", ""),
             "tags": tags,
             "content": e.get("content", ""),
             "source": e.get("source_file", ""),
+            "price": price_info,
             "confidence": {
                 "score": score,
                 "level": level,
@@ -773,6 +1171,7 @@ def search_knowledge(query: str, max_results: int = 6, city: str = "", mode: str
                     "vector_similarity": e.get("_vector_score", 0.0),
                     "keyword_boost": e.get("_kw_boost", 0.0),
                     "tag_match_boost": e.get("_tag_boost", 0.0),
+                    "semantic_tag_boost": e.get("_sem_tag_boost", 0.0),
                 },
             },
         }
@@ -804,5 +1203,20 @@ def search_knowledge(query: str, max_results: int = 6, city: str = "", mode: str
         else:
             summary = f"未找到匹配「{city}」的结果。"
         output["city_match_summary"] = summary
+
+    if max_price and max_price > 0:
+        output["price_filter"] = (
+            f"已按人均≤{max_price}元过滤" + ("" if price_filter_applied else "（无结构化价格数据，未实际生效）")
+            if results else f"人均≤{max_price}元：无结果"
+        )
+
+    # 语义场景路由概况（v2）
+    if routing_info:
+        acts = ", ".join(f"{t}({s})" for t, s in routing_info["activated"])
+        output["semantic_routing"] = {
+            "activated_tags": acts,
+            "scenario_filtered": routing_info["scenario_filtered"],
+            "note": "已按激活的场景标签参与排序" + ("与筛选" if routing_info["scenario_filtered"] else "（覆盖不足，未做硬筛）"),
+        }
 
     return json.dumps(output, ensure_ascii=False, indent=2)

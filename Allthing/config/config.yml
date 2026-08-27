@@ -37,7 +37,7 @@ paths:
   input_dir: "workspace/input"    # 账单压缩包下载目录
   unzip_dir: "workspace/unzipped" # 账单解压目录
   db_dir: "data/checkpoints"      # SQLite checkpointer 持久化
-  vectordb_dir: "data/vectordb"   # ChromaDB 向量库（RAG用）
+  vectordb_dir: "data/vectordb"   # 向量库目录（快照/构建信息）
   knowledge_base_dir: "knowledge_base"  # Markdown 经验文档
   docs_dir: "docs"                # 项目文档
 
@@ -105,3 +105,9 @@ monitoring:
   log_dir: "data/monitoring"         # 日志/报告输出目录
   buffer_size: 500                   # 内存缓冲区大小（条）
   dashboard_window: 100              # 仪表盘统计窗口（最近 N 条）
+
+# ---------- 向量库（v3 · Milvus） ----------
+vectordb:
+  backend: "milvus"
+  uri: "http://127.0.0.1:19530"
+  collection: "knowledge"
