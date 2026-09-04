@@ -17,6 +17,7 @@ import sys
 import os
 import re
 import json
+import socket
 import logging
 import numpy as np
 from pathlib import Path
@@ -52,6 +53,35 @@ _index_mtime: float = 0
 # ===== Milvus 后端配置 =====
 _MILVUS_URI = config.get("vectordb.uri", "http://127.0.0.1:19530")
 _MILVUS_ENABLED = bool(store and store.is_available())
+
+# Milvus 熔断。
+# is_available() 只校验配置与客户端能否构造，不代表真能连上服务端 ——
+# 实测 milvus-lite 未安装时它返回 True，但每次查询都要先卡一次连接超时
+# （单题最坏 300 秒）才降级，代价极高。连续失败达阈值后直接走降级管线。
+_MILVUS_FAIL_COUNT = 0
+_MILVUS_FAIL_THRESHOLD = 3
+_MILVUS_CIRCUIT_OPEN = False
+
+
+def _milvus_reachable(uri: str, timeout: float = 1.5) -> bool:
+    """
+    快速 TCP 探活：不依赖 pymilvus 握手，避免每次查询都卡在 Milvus 连接超时。
+
+    为什么需要它：pymilvus 的 MilvusClient(uri=...) 在远端不可达时会阻塞到
+    内部超时（实测单题最坏 300s），而 is_available() 只检查 SDK 能否 import、
+    不验证网络可达性。本函数用裸 socket 在 1.5s 内判定端口是否可连，连不上
+    直接开熔断走降级路径，整次评测/查询不再为每个 query 付一次超时代价。
+    """
+    try:
+        from urllib.parse import urlparse
+        raw = uri if "://" in uri else "http://" + uri
+        p = urlparse(raw)
+        host = p.hostname or "127.0.0.1"
+        port = p.port or 19530
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except Exception:
+        return False
 
 # ===== 本地快照（Milvus 断连时的降级数据源） =====
 _SNAPSHOT_PATH = Path(config.get("paths.data_dir", "data")) / "knowledge_snapshot.json"
@@ -700,9 +730,71 @@ def _extract_query_tags(query: str) -> List[str]:
     return matched
 
 
-def _milvus_rank(query: str, city: str, max_price: int, max_results: int) -> List[Dict]:
+# RRF 平滑常数。原论文(Cormack et al. SIGIR 2009)在 TREC 大语料上取 60，
+# 语料规模越小平滑常数越要小 —— 否则名次差异会被压平，融合退化成"是否命中"的投票。
+# 本库 50 题 Golden Set 上扫描 k ∈ {1,5,10,20,60} 的 Recall@5：
+#     k=1  0.8200 | k=5  0.8200 | k=10 0.7900 | k=20 0.7900 | k=60 0.7900
+# k=5 已到最优平台，且不像 k=1 那样过度依赖单路头名，故取 5。
+RRF_K = 5
+
+# BM25 融合检索器缓存：构建索引要对全库 jieba 分词，逐 query 重建是延迟虚高的主因
+_HYBRID_RETRIEVER_CACHE = {}
+
+
+def _get_hybrid_retriever(entries, emb_matrix, fusion="rrf", rrf_k=RRF_K):
+    """
+    取（或构建）BM25 融合检索器，按语料指纹缓存复用。
+
+    以 (融合策略, k, 条目数, 标题序列) 为 key —— 知识库内容变化会改变标题序列，
+    从而自然失效重建，不会用到过期索引。
+    """
+    from tools.knowledge.hybrid_retriever import BM25HybridRetriever
+
+    key = (fusion, rrf_k, len(entries),
+           tuple(e.get("title", "") for e in entries))
+    retriever = _HYBRID_RETRIEVER_CACHE.get(key)
+    if retriever is None:
+        retriever = BM25HybridRetriever(entries, emb_matrix,
+                                        fusion=fusion, rrf_k=rrf_k)
+        if len(_HYBRID_RETRIEVER_CACHE) > 16:
+            _HYBRID_RETRIEVER_CACHE.clear()
+        _HYBRID_RETRIEVER_CACHE[key] = retriever
+    return retriever
+
+
+def _bm25_fused_rank(query: str, entries: List[Dict], emb_matrix,
+                     max_results: int, fusion: str = "rrf",
+                     rrf_k: int = RRF_K) -> List[Dict]:
+    """
+    降级管线的 BM25 + 向量双路融合检索。
+
+    产出与 _hybrid_search 同构的 ranked 列表（含 _score），下游置信度与
+    城市匹配逻辑可零改动复用。
+    """
+    retriever = _get_hybrid_retriever(entries, emb_matrix,
+                                      fusion=fusion, rrf_k=rrf_k)
+    fused = retriever.search(query, top_k=max_results,
+                             candidate_k=max(max_results * 2, 20))
+    ranked = []
+    for idx, score in fused:
+        entry = dict(entries[idx])
+        entry["_vector_score"] = 0.0
+        entry["_kw_boost"] = 0.0
+        entry["_tag_boost"] = 0.0
+        entry["_score"] = round(float(score), 4)
+        ranked.append(entry)
+    return ranked
+
+
+def _milvus_rank(query: str, city: str, max_price: int, max_results: int,
+                 mode: str = "hybrid", rrf_k: int = 5) -> List[Dict]:
     """
     Milvus 主检索路径：服务端混合检索(稠密+中文BM25) + 应用层精排。
+
+    mode: "vector"=纯稠密向量单路；"hybrid"=两路 RRF 融合（默认）；
+          "linear"=两路 WeightedRanker 加权（对照实验用）。
+          说明：服务端融合只决定"召回哪些条目"，最终排序仍由应用层重算的
+          _score 决定（见下方 results.sort），置信度沿用本地余弦语义。
 
     返回与 _hybrid_search 完全同构的 ranked 列表（含 _score/_vector_score/
     _kw_boost/_tag_boost/_sem_tag_boost/_scenario_filtered/_semantic_tags），
@@ -720,8 +812,13 @@ def _milvus_rank(query: str, city: str, max_price: int, max_results: int) -> Lis
 
     expr = store.build_filter(city=city, max_price=max_price)
     limit = max(max_results * 2, 10)
-    hits = store.hybrid_search(client, query,
-                               [float(x) for x in qvec], expr, limit)
+    hits = store.hybrid_search(
+        client, query,
+        [float(x) for x in qvec], expr, limit,
+        ranker=("weighted" if mode == "linear" else "rrf"),
+        rrf_k=rrf_k,
+        use_sparse=(mode != "vector"),
+    )
 
     keywords = re.split(r"[\s,，、]+", query.strip())
     keywords = [k for k in keywords if k]
@@ -970,7 +1067,8 @@ def _log_rag_query(query: str, ranked: list, latency_ms: float,
 
 @tool
 def search_knowledge(query: str, max_results: int = 6, city: str = "",
-                     max_price: int = 0, mode: str = "vector") -> str:
+                     max_price: int = 0, mode: str = "hybrid",
+                     rrf_k: int = 0) -> str:
     """
     在本地知识库中搜索中山美食/旅行/景点/住宿/交通/购物经验（向量语义检索）。
     这是本地经验库的首要检索工具。当用户询问以下任一类问题时，必须优先使用：
@@ -995,31 +1093,53 @@ def search_knowledge(query: str, max_results: int = 6, city: str = "",
         city: 用户当前所在城市，如"中山"、"梅州"。用于标注结果是否属于该城市
         max_price: 人均消费上限（元）。0 表示不限制。按结构化 price_min 字段前置过滤，
                    价格未知的条目会保留。如月底省钱场景传 30~35
-        mode: 检索模式。"vector"=纯向量检索（默认），"hybrid"=BM25+向量混合检索
+        mode: 检索模式，三选一：
+              "hybrid"（默认）BM25+向量双路，RRF 融合（score=Σ 1/(k+rank)）
+              "linear"        BM25+向量双路，min-max 归一化后线性加权（对照用）
+              "vector"        纯稠密向量单路（评测 baseline）
+              说明：Milvus 可用时服务端融合只决定召回集，最终排序仍由应用层
+              重算的 _score 决定；两种模式下该行为一致。
+        rrf_k: 覆盖 RRF 平滑常数（0=用模块默认 RRF_K=20）。调参/评测用。
 
     Returns:
         JSON 格式搜索结果，含 city_match_summary（城市匹配概况）、semantic_routing
         （语义场景路由详情）和每条结果的 city_match / price 标注
     """
     _t0 = _monotonic_ms()
+    # rrf_k 由 LLM 传入时做范围钳制，防止异常值破坏融合
+    _rrf_k = rrf_k if (isinstance(rrf_k, int) and 0 < rrf_k <= 1000) else RRF_K
 
     entries, emb_matrix = _build_index()
 
     if not entries:
         return json.dumps({"error": "知识库为空，请先导入数据", "total": 0}, ensure_ascii=False)
 
+    # Milvus 熔断状态在函数内会被改写，声明为 global 避免被当成局部变量
+    global _MILVUS_CIRCUIT_OPEN, _MILVUS_FAIL_COUNT
+
     # ===== v3: Milvus 主路径（服务端混合检索 + expr 下推过滤） =====
     ranked: Optional[List[Dict]] = None
     price_filter_applied = False
-    if _MILVUS_ENABLED:
-        try:
-            ranked = _milvus_rank(query, city, max_price, max_results)
-            price_filter_applied = bool(max_price and max_price > 0)
-            logger.debug("Milvus 路径: %d 条结果", len(ranked))
-        except Exception as e:
-            logger.warning("Milvus 检索失败(%s: %s)，降级应用层管线",
-                           type(e).__name__, e)
-            ranked = None
+    if _MILVUS_ENABLED and not _MILVUS_CIRCUIT_OPEN:
+        # 前置 TCP 探活：远端不可达时直接开熔断，避免每题卡一次连接超时
+        if _milvus_reachable(_MILVUS_URI):
+            try:
+                ranked = _milvus_rank(query, city, max_price, max_results,
+                                      mode=mode, rrf_k=_rrf_k)
+                price_filter_applied = bool(max_price and max_price > 0)
+                logger.debug("Milvus 路径: %d 条结果", len(ranked))
+            except Exception as e:
+                _MILVUS_FAIL_COUNT += 1
+                logger.warning(
+                    "Milvus 检索失败(%s: %s)，降级应用层管线 (失败计数 %d/%d)",
+                    type(e).__name__, e, _MILVUS_FAIL_COUNT, _MILVUS_FAIL_THRESHOLD)
+                if _MILVUS_FAIL_COUNT >= _MILVUS_FAIL_THRESHOLD:
+                    _MILVUS_CIRCUIT_OPEN = True
+                    logger.warning("Milvus 连续失败达阈值，熔断开启，后续查询直接走降级路径")
+                ranked = None
+        else:
+            _MILVUS_CIRCUIT_OPEN = True
+            logger.debug("Milvus 不可达（TCP 探活失败），熔断开启，走降级路径")
 
     # ===== 降级路径：旧版应用层管线（Milvus 不可用时的兜底） =====
     if ranked is None:
@@ -1046,30 +1166,27 @@ def search_knowledge(query: str, max_results: int = 6, city: str = "",
                 emb_matrix = emb_matrix[filtered_indices]
                 price_filter_applied = True
 
-        ranked = _hybrid_search(query, entries, emb_matrix, max_results)
-
-        # BM25 混合检索模式（旧版可选；仅降级管线有效，Milvus 路径已内置 BM25）
-        if mode == "hybrid":
+        # mode="hybrid" 走双路融合，"vector" 走单路语义检索。
+        # 旧实现先无条件跑 _hybrid_search、再用融合结果覆盖，等于每次查询跑两遍
+        # 完整检索（两次 Embedding 调用），延迟虚高约一倍 —— 这里按 mode 二选一。
+        if mode in ("hybrid", "linear"):
             try:
-                from tools.knowledge.hybrid_retriever import BM25HybridRetriever, is_bm25_available
+                from tools.knowledge.hybrid_retriever import is_bm25_available
                 if is_bm25_available():
-                    retriever = BM25HybridRetriever(entries, emb_matrix)
-                    bm25_fused = retriever.search(query, top_k=max_results, candidate_k=20)
-
-                    ranked_hybrid = []
-                    for idx, rrf_score in bm25_fused:
-                        entry = dict(entries[idx])
-                        entry["_vector_score"] = 0.0
-                        entry["_kw_boost"] = 0.0
-                        entry["_tag_boost"] = 0.0
-                        entry["_score"] = round(rrf_score, 4)
-                        ranked_hybrid.append(entry)
-                    ranked = ranked_hybrid
-                    logger.debug("BM25 混合检索: %d 条结果", len(ranked))
+                    ranked = _bm25_fused_rank(
+                        query, entries, emb_matrix, max_results,
+                        fusion="rrf" if mode == "hybrid" else "linear",
+                        rrf_k=_rrf_k,
+                    )
+                    logger.debug("BM25 融合检索(%s): %d 条结果", mode, len(ranked))
                 else:
                     logger.warning("BM25 依赖未安装，回退到纯向量检索")
+                    ranked = _hybrid_search(query, entries, emb_matrix, max_results)
             except Exception as e:
-                logger.warning("BM25 混合检索异常: %s，回退到纯向量检索", e)
+                logger.warning("BM25 融合检索异常: %s，回退到纯向量检索", e)
+                ranked = _hybrid_search(query, entries, emb_matrix, max_results)
+        else:
+            ranked = _hybrid_search(query, entries, emb_matrix, max_results)
 
     _latency_ms = _monotonic_ms() - _t0
 

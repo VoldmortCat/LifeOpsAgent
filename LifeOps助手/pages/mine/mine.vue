@@ -4,10 +4,28 @@
 			<!-- 用户卡片 -->
 			<view class="user-card">
 				<view class="avatar">
-					<text class="avatar-text">🧑</text>
+					<text class="avatar-text">{{ authStore.username ? authStore.username.charAt(0).toUpperCase() : '🧑' }}</text>
 				</view>
-				<text class="user-name">{{ userName }}</text>
-				<text class="user-thread">当前线程: {{ chatStore.currentThreadId }}</text>
+				<text class="user-name">{{ authStore.username || '未登录' }}</text>
+				<text class="user-account">{{ '@' + authStore.user?.username || '' }}</text>
+				<view class="user-thread" v-if="chatStore.currentThreadId">
+					<text>当前对话: {{ chatStore.currentConversation?.title || chatStore.currentThreadId }}</text>
+				</view>
+			</view>
+
+			<!-- 对话管理 -->
+			<view class="menu-section">
+				<text class="menu-section-title">对话管理</text>
+				<view class="menu-item" @click="goToIndexPage">
+					<text class="menu-icon">💬</text>
+					<text class="menu-label">返回对话</text>
+					<text class="menu-arrow">›</text>
+				</view>
+				<view class="menu-item" @click="handleNewChat">
+					<text class="menu-icon">➕</text>
+					<text class="menu-label">新建对话</text>
+					<text class="menu-arrow">›</text>
+				</view>
 			</view>
 
 			<!-- 知识库 -->
@@ -86,6 +104,15 @@
 				</view>
 			</view>
 
+			<!-- 退出登录 -->
+			<view class="menu-section">
+				<view class="menu-item menu-item-danger" @click="handleLogout">
+					<text class="menu-icon">🚪</text>
+					<text class="menu-label">退出登录</text>
+					<text class="menu-arrow">›</text>
+				</view>
+			</view>
+
 			<!-- 关于 -->
 			<view class="menu-section">
 				<view class="menu-item" @click="handleAbout">
@@ -101,13 +128,19 @@
 </template>
 
 <script setup>
-	import { ref, onMounted } from 'vue'
+	import { ref, computed, onMounted } from 'vue'
 	import { useChatStore } from '@/store/chat.js'
+	import { useAuthStore } from '@/store/auth.js'
 	import { getRagStatus, runRagTest, getUserConfig, saveUserConfig } from '@/utils/api.js'
 
 	const chatStore = useChatStore()
+	const authStore = useAuthStore()
 
-	const userName = ref('LifeOps 用户')
+	const serverHost = computed(() => {
+		const host = uni.getStorageSync('api_host') || 'localhost'
+		const port = uni.getStorageSync('api_port') || '8000'
+		return host + ':' + port
+	})
 
 	// ============ 用户配置状态 ============
 	const emailUsername = ref('')
@@ -118,6 +151,26 @@
 	const billSkipRows = ref(17)
 	const showPassword = ref(false)
 	const isSaving = ref(false)
+
+	function goToIndexPage() {
+		uni.switchTab({ url: '/pages/index/index' })
+	}
+
+	function handleNewChat() {
+		uni.showModal({
+			title: '新建对话',
+			editable: true,
+			placeholderText: '输入对话名称',
+			success: async (res) => {
+				if (res.confirm) {
+					await chatStore.newConversation(res.content || '新对话')
+				} else {
+					await chatStore.newConversation('新对话')
+				}
+				uni.switchTab({ url: '/pages/index/index' })
+			}
+		})
+	}
 
 	async function handleRagStatus() {
 		try {
@@ -143,13 +196,25 @@
 	function handleClearCache() {
 		uni.showModal({
 			title: '清除缓存',
-			content: '将清除所有本地对话记录和设置，确定继续？',
+			content: '将清除所有本地缓存数据，确定继续？',
 			success: (res) => {
 				if (res.confirm) {
-					chatStore.conversations = []
-					chatStore.clearMessages()
 					uni.clearStorageSync()
 					uni.showToast({ title: '缓存已清除', icon: 'success' })
+				}
+			}
+		})
+	}
+
+	function handleLogout() {
+		uni.showModal({
+			title: '退出登录',
+			content: '确定要退出登录吗？',
+			success: (res) => {
+				if (res.confirm) {
+					authStore.logout()
+					chatStore.disconnect()
+					uni.reLaunch({ url: '/pages/login/login' })
 				}
 			}
 		})
@@ -158,7 +223,13 @@
 	function handleAbout() {
 		uni.showModal({
 			title: 'LifeOps Agent V3.0',
-			content: '基于 LangGraph 的多 Agent 智能生活管家\n\n后端: Python + LangGraph\n前端: uni-app (Vue3)\nLLM: 通义千问\n地图: 百度地图 API\n向量库: ChromaDB',
+			content: '基于 LangGraph 的多 Agent 智能生活管家
+
+后端: Python + LangGraph
+前端: uni-app (Vue3)
+LLM: 通义千问
+地图: 百度地图 API
+向量库: ChromaDB',
 			showCancel: false
 		})
 	}
@@ -221,6 +292,25 @@
 		}
 	}
 
+	function handleServerConfig() {
+		uni.showModal({
+			title: '服务器配置',
+			editable: true,
+			placeholderText: '输入地址，如 192.168.1.5:8000',
+			content: serverHost.value,
+			success: (res) => {
+				if (res.confirm && res.content) {
+					const parts = res.content.split(':')
+					const host = parts[0] || 'localhost'
+					const port = parts[1] || '8000'
+					uni.setStorageSync('api_host', host)
+					uni.setStorageSync('api_port', port)
+					uni.showToast({ title: '配置已保存', icon: 'success' })
+				}
+			}
+		})
+	}
+
 	onMounted(() => {
 		fetchUserConfig()
 	})
@@ -252,16 +342,18 @@
 		width: 60px;
 		height: 60px;
 		border-radius: 50%;
-		background-color: #f0f7ff;
+		background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
 		display: flex;
 		align-items: center;
 		justify-content: center;
 		margin-bottom: 10px;
+
+		.avatar-text { color: #fff; font-size: 26px; font-weight: 600; }
 	}
 
-	.avatar-text { font-size: 30px; }
-	.user-name { font-size: 17px; font-weight: 600; color: #222; margin-bottom: 4px; }
-	.user-thread { font-size: 11px; color: #bbb; font-family: monospace; }
+	.user-name { font-size: 17px; font-weight: 600; color: #222; margin-bottom: 2px; }
+	.user-account { font-size: 12px; color: #bbb; margin-bottom: 4px; }
+	.user-thread { font-size: 11px; color: #ccc; font-family: monospace; margin-top: 4px; }
 
 	// 菜单组
 	.menu-section {
@@ -286,6 +378,10 @@
 
 		&:active { background-color: #f8f9fb; }
 		&:last-child { border-bottom: none; }
+
+		&.menu-item-danger {
+			.menu-label { color: #dd524d; }
+		}
 	}
 
 	.menu-icon { font-size: 18px; margin-right: 10px; }

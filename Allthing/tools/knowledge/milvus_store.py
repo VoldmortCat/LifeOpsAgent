@@ -24,7 +24,7 @@ logger = logging.getLogger("lifeops.knowledge.milvus")
 try:
     from pymilvus import (
         MilvusClient, DataType, Function, FunctionType,
-        AnnSearchRequest, WeightedRanker,
+        AnnSearchRequest, WeightedRanker, RRFRanker,
     )
     _MILVUS_AVAILABLE = True
 except ImportError:
@@ -49,6 +49,14 @@ def get_client(uri: str):
         return _client
     if not _MILVUS_AVAILABLE:
         raise RuntimeError("pymilvus 未安装")
+    # Milvus Lite 本地文件模式：确保父目录存在，避免首次写入失败
+    if not uri.startswith(("http://", "https://", "tcp://")):
+        try:
+            path = Path(uri)
+            if path.parent and not path.parent.exists():
+                path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
     _client = MilvusClient(uri=uri)
     return _client
 
@@ -58,8 +66,10 @@ def _build_schema():
 
     schema.add_field("id", DataType.INT64, is_primary=True)
     # BM25 输入字段：启用中文分析器（分词在服务端完成）
+    # 注意：Milvus Lite 仅支持 standard/jieba，完整版 Milvus 2.5 支持 chinese。
+    # 用 jieba 保证两种部署形态都能跑（效果与 chinese 分词相当）。
     schema.add_field("text", DataType.VARCHAR, max_length=65535,
-                     enable_analyzer=True, analyzer_params={"type": "chinese"})
+                     enable_analyzer=True, analyzer_params={"type": "jieba"})
     schema.add_field("dense", DataType.FLOAT_VECTOR, dim=DIM)
     schema.add_field("sparse", DataType.SPARSE_FLOAT_VECTOR)
     schema.add_field("title", DataType.VARCHAR, max_length=512)
@@ -167,10 +177,21 @@ def build_filter(city: str = "", max_price: int = 0,
 
 def hybrid_search(client, query_text: str, query_vec: List[float],
                   expr: str, limit: int,
-                  vector_weight: float = 0.6) -> List[Dict]:
+                  vector_weight: float = 0.6,
+                  ranker: str = "rrf", rrf_k: int = 5,
+                  use_sparse: bool = True) -> List[Dict]:
     """
-    服务端混合检索：BM25 稀疏 + 稠密向量，WeightedRanker 融合。
-    vector_weight 对应旧版 alpha=0.6 的语义权重连续性。
+    服务端混合检索：BM25 稀疏 + 稠密向量，两种融合器可选。
+
+      use_sparse    True=稠密+BM25 两路融合；False=纯稠密向量单路（评测 baseline 用）
+      ranker="rrf"      服务端 RRF：score(d)=Σ 1/(k+rank_i(d))，只吃名次，
+                        与降级管线 BM25HybridRetriever(fusion="rrf") 语义一致
+      ranker="weighted" 服务端加权：WeightedRanker(vector_weight, 1-vector_weight)，
+                        对应旧版 alpha=0.6 的语义权重
+
+    rrf_k: RRF 平滑常数。Milvus 服务端默认 60，针对大语料；本库仅数十条，
+           取 5 保留名次区分度（与降级管线默认值保持一致，便于两条路径对齐）。
+
     返回 entry(dict) + _fused_score + _dense_vec（本地算余弦置信度用）。
     """
     # 过滤必须下推到每个 AnnSearchRequest（顶层 filter 在部分版本不作用于混合检索）
@@ -180,14 +201,24 @@ def hybrid_search(client, query_text: str, query_vec: List[float],
             param={"metric_type": "IP", "params": {"ef": 128}},
             limit=limit, expr=expr or "",
         ),
-        AnnSearchRequest(
-            data=[query_text], anns_field="sparse",   # 直接传原文，服务端分词+BM25
-            param={"metric_type": "BM25"},
-            limit=limit, expr=expr or "",
-        ),
     ]
+    if use_sparse:
+        reqs.append(
+            AnnSearchRequest(
+                data=[query_text], anns_field="sparse",  # 直接传原文，服务端分词+BM25
+                param={"metric_type": "BM25"},
+                limit=limit, expr=expr or "",
+            )
+        )
+    if not use_sparse:
+        # 单路无需融合器
+        fusion_ranker = None
+    elif ranker == "weighted":
+        fusion_ranker = WeightedRanker(vector_weight, 1.0 - vector_weight)
+    else:
+        fusion_ranker = RRFRanker(rrf_k)
     hits = client.hybrid_search(
-        COLLECTION, reqs, ranker=WeightedRanker(vector_weight, 1.0 - vector_weight),
+        COLLECTION, reqs, ranker=fusion_ranker,
         limit=limit,
         output_fields=["meta_json", "dense"],
     )

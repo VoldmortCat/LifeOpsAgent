@@ -7,13 +7,19 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from langgraph.checkpoint.sqlite import SqliteSaver
 from graph.graph_builder import LifeOpsGraphRouter
 from monitoring import get_logger, init_langsmith
+from auth import register_user, login_user, require_current_user, get_current_user
+from db import (
+    get_user_conversations, get_conversation_by_thread, get_or_create_conversation,
+    get_conversation_messages, save_message, delete_conversation as db_delete_conversation,
+    update_conversation_title,
+)
 
 logger = get_logger("lifeops.server")
 
@@ -78,6 +84,51 @@ def save_user_config(payload: UserConfigPayload):
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+
+# ====================== 用户认证 API ======================
+
+from pydantic import BaseModel
+
+class AuthRegister(BaseModel):
+    username: str
+    password: str
+    display_name: str = ""
+
+class AuthLogin(BaseModel):
+    username: str
+    password: str
+
+@app.post("/api/auth/register")
+def api_register(payload: AuthRegister):
+    """用户注册"""
+    try:
+        result = register_user(payload.username, payload.password, payload.display_name)
+        return result
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+@app.post("/api/auth/login")
+def api_login(payload: AuthLogin):
+    """用户登录"""
+    try:
+        result = login_user(payload.username, payload.password)
+        return result
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+@app.get("/api/auth/me")
+def api_get_me(user: dict = Depends(require_current_user)):
+    """获取当前用户信息"""
+    return {
+        "ok": True,
+        "user": {
+            "id": user["id"],
+            "username": user["username"],
+            "display_name": user.get("display_name", user["username"]),
+            "avatar": user.get("avatar", ""),
+            "created_at": user.get("created_at", ""),
+        }
+    }
 
 # ====================== 账单 API ======================
 
@@ -215,7 +266,8 @@ def get_bill_chart_file(period: str = "month", type: str = "trend"):
 
 # ====================== 文档中心 API ======================
 
-ALLOWED_EXTENSIONS = {".md", ".pdf", ".txt", ".csv", ".json", ".yml", ".yaml"}
+# 文档导入只支持 Markdown（.md）：导入即参与 RAG 向量化（_parse_all_blocks 仅解析 .md）
+ALLOWED_EXTENSIONS = {".md"}
 
 
 @app.get("/api/docs/list")
@@ -250,7 +302,7 @@ def list_docs():
 async def import_doc(file: UploadFile = File(...), category: str = "other"):
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
-        return {"ok": False, "error": f"不支持的文件格式: {ext}"}
+        return {"ok": False, "error": f"仅支持 Markdown(.md) 文件，不支持: {ext}"}
 
     cat_map = {
         "food": "food",
@@ -350,21 +402,71 @@ def run_rag_test():
 # ====================== 对话管理 API ======================
 
 @app.get("/api/conversations")
-def get_conversations():
-    return {"conversations": []}
+def api_get_conversations(user: dict = Depends(require_current_user)):
+    """获取当前用户的所有对话"""
+    convs = get_user_conversations(user["id"])
+    return {"conversations": convs}
 
+@app.get("/api/conversations/{thread_id}")
+def api_get_conversation(thread_id: str, user: dict = Depends(require_current_user)):
+    """获取指定对话及其消息"""
+    conv = get_conversation_by_thread(user["id"], thread_id)
+    if not conv:
+        return {"ok": False, "error": "对话不存在", "conversation": None, "messages": []}
+
+    messages = get_conversation_messages(conv["id"])
+    return {"ok": True, "conversation": conv, "messages": messages}
+
+@app.post("/api/conversations")
+def api_create_conversation(user: dict = Depends(require_current_user)):
+    """创建新对话"""
+    import uuid
+    thread_id = f"thread_{uuid.uuid4().hex[:12]}"
+    conv = get_or_create_conversation(user["id"], thread_id, "新对话")
+    return {"ok": True, "conversation": conv}
 
 @app.delete("/api/conversations/{thread_id}")
-def delete_conversation(thread_id: str):
+def api_delete_conversation(thread_id: str, user: dict = Depends(require_current_user)):
+    """删除指定对话"""
+    conv = get_conversation_by_thread(user["id"], thread_id)
+    if not conv:
+        return {"ok": False, "error": "对话不存在"}
+    db_delete_conversation(conv["id"], user["id"])
     return {"ok": True, "thread_id": thread_id}
+
+@app.put("/api/conversations/{thread_id}")
+def api_update_conversation(thread_id: str, payload: dict, user: dict = Depends(require_current_user)):
+    """更新对话标题"""
+    conv = get_conversation_by_thread(user["id"], thread_id)
+    if not conv:
+        return {"ok": False, "error": "对话不存在"}
+    title = payload.get("title", "")
+    if title:
+        update_conversation_title(conv["id"], title)
+    return {"ok": True, "conversation": conv}
 
 
 # ====================== WebSocket 聊天 ======================
 
 @app.websocket("/chat/{thread_id}")
-async def chat_websocket(websocket: WebSocket, thread_id: str):
+async def chat_websocket(websocket: WebSocket, thread_id: str, token: str = ""):
+    # Accept first, then validate
     await websocket.accept()
     logger.info("WS 连接建立: thread_id=%s", thread_id)
+
+    # Try to authenticate via query param token
+    from auth import decode_token, get_user_by_id
+    user = None
+    query_token = token
+    if not query_token:
+        # Try to get token from query string (already parsed by websocket)
+        pass
+
+    if query_token:
+        payload = decode_token(query_token)
+        if payload:
+            user_id = int(payload.get("sub", 0))
+            user = get_user_by_id(user_id) if user_id > 0 else None
 
     router = _get_router()
 
@@ -378,6 +480,17 @@ async def chat_websocket(websocket: WebSocket, thread_id: str):
             if msg_type != "message" or not user_input.strip():
                 continue
 
+            # Save user message if authenticated
+            if user:
+                conv = get_or_create_conversation(user["id"], thread_id)
+                save_message(conv["id"], "user", user_input)
+                # Auto-generate title from first message
+                if user_input:
+                    msg_count = len(get_conversation_messages(conv["id"]))
+                    if msg_count <= 1:
+                        title = user_input[:30] + ("..." if len(user_input) > 30 else "")
+                        update_conversation_title(conv["id"], title)
+
             await websocket.send_json({"type": "thinking", "content": "正在思考..."})
 
             full_text = await asyncio.to_thread(router.route, user_input, thread_id)
@@ -389,6 +502,11 @@ async def chat_websocket(websocket: WebSocket, thread_id: str):
                     "content": full_text[i:i + chunk_size],
                 })
                 await asyncio.sleep(0.02)
+
+            # Save agent response if authenticated
+            if user and full_text:
+                conv = get_or_create_conversation(user["id"], thread_id)
+                save_message(conv["id"], "agent", full_text)
 
             await websocket.send_json({"type": "done"})
 
@@ -410,7 +528,9 @@ if __name__ == "__main__":
     print("[LifeOps] Agent API Server V3.0")
     print("   [REST] API: http://0.0.0.0:8000")
     print("   [WS] WebSocket: ws://0.0.0.0:8000/chat/{thread_id}")
+    print("   [AUTH] /api/auth/*")
     print("   [BILL] /api/bills/*")
     print("   [DOCS] /api/docs/*")
+    print("   [CONV] /api/conversations/*")
     print("=" * 60)
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")

@@ -1,17 +1,24 @@
 """
 RAG 评估脚本 — 基于 Golden Set 计算检索指标
-支持 baseline（向量）和 hybrid（BM25+向量）两种模式对比
+支持三种检索模式对比：
+
+    vector  纯稠密向量单路（baseline）
+    hybrid  BM25+向量双路，RRF 融合：score(d) = Σ 1/(k + rank_i(d))
+    linear  BM25+向量双路，min-max 归一化后线性加权（对照实验）
 
 用法：
     cd Allthing
-    python scripts/eval_rag.py              # 基线评估
-    python scripts/eval_rag.py --hybrid     # BM25 混合检索评估
-    python scripts/eval_rag.py --compare    # 对比两种模式
+    python scripts/eval_rag.py                  # 默认跑 hybrid（RRF）
+    python scripts/eval_rag.py --vector         # 只跑纯向量 baseline
+    python scripts/eval_rag.py --linear         # 只跑线性加权对照
+    python scripts/eval_rag.py --compare        # 三种模式全跑并对比
+    python scripts/eval_rag.py --compare --rrf-k 10   # 指定 RRF 平滑常数
 
 输出：
     - 控制台：每题结果 + 汇总指标 + 对比表
-    - data/rag_eval/baseline_results.json：基线原始数据
-    - data/rag_eval/hybrid_results.json：混合检索原始数据
+    - data/rag_eval/baseline_results.json：纯向量原始数据
+    - data/rag_eval/hybrid_results.json：RRF 融合原始数据
+    - data/rag_eval/linear_results.json：线性加权原始数据
 """
 import sys
 import os
@@ -36,6 +43,15 @@ GOLDEN_SET_PATH = "data/rag_golden_set.json"
 OUTPUT_DIR = Path("data/rag_eval")
 TOP_K = 5
 CITY = "中山"
+# 本库实测最优（k∈{1,5,10,20,60} 扫描后取 5，见 README/评测记录）
+DEFAULT_RRF_K = 5
+
+# mode -> (展示名, 检索链路描述, 结果文件名)
+MODES = {
+    "vector": ("Baseline", "纯稠密向量单路检索", "baseline_results.json"),
+    "hybrid": ("RRF Hybrid", f"BM25+向量双路 · RRF 融合", "hybrid_results.json"),
+    "linear": ("Linear Hybrid", "BM25+向量双路 · min-max 归一化线性加权", "linear_results.json"),
+}
 
 
 def load_golden_set(path: str) -> list:
@@ -49,14 +65,17 @@ def extract_title(result: dict) -> str:
     return result.get("title", "")
 
 
-def evaluate_single(question: str, expected_titles: list, k: int = TOP_K, city: str = CITY, mode: str = "vector") -> dict:
+def evaluate_single(question: str, expected_titles: list, k: int = TOP_K,
+                    city: str = CITY, mode: str = "hybrid",
+                    rrf_k: int = DEFAULT_RRF_K) -> dict:
     """
     对单个问题执行检索并评估。
-    mode: "vector"=纯向量检索, "hybrid"=BM25+向量混合检索
+    mode: "vector"=纯向量, "hybrid"=RRF 融合, "linear"=线性加权融合
     """
     t0 = time.perf_counter()
     try:
-        raw_result = search_knowledge.func(query=question, max_results=k, city=city, mode=mode)
+        raw_result = search_knowledge.func(
+            query=question, max_results=k, city=city, mode=mode, rrf_k=rrf_k)
     except Exception as e:
         return {
             "question": question,
@@ -101,7 +120,14 @@ def evaluate_single(question: str, expected_titles: list, k: int = TOP_K, city: 
 
     results = data.get("results", [])
     retrieved_titles = [extract_title(r) for r in results]
-    top1_score = results[0].get("_score", 0.0) if results else 0.0
+
+    # 注意：真实分数字段是 confidence.score。
+    # 旧实现取 results[0]["_score"]，而对外输出的条目里没有该字段，
+    # 导致 top1_score 恒为 0、avg_top1_score 恒为 0，该指标形同虚设。
+    top1_score = 0.0
+    if results:
+        conf = results[0].get("confidence") or {}
+        top1_score = conf.get("score", 0.0)
 
     expected_set = set(expected_titles)
     hits = set(retrieved_titles) & expected_set
@@ -126,13 +152,16 @@ def evaluate_single(question: str, expected_titles: list, k: int = TOP_K, city: 
     }
 
 
-def run_evaluation(golden_set: list, mode: str = "vector") -> dict:
+def run_evaluation(golden_set: list, mode: str = "hybrid",
+                   rrf_k: int = DEFAULT_RRF_K) -> dict:
     """运行完整评估"""
-    mode_label = "BM25+向量混合检索 (RRF融合)" if mode == "hybrid" else "纯向量检索 + 关键词加权"
-    mode_name = "BM25 Hybrid" if mode == "hybrid" else "Baseline"
+    mode_name, mode_label, filename = MODES[mode]
+    if mode == "hybrid":
+        mode_label = f"BM25+向量双路 · RRF 融合 (k={rrf_k})"
 
     print("=" * 70)
-    print(f"RAG 评估 — {mode_name}（{mode_label}）")
+    print(f"RAG 评估 — {mode_name}")
+    print(f"链路: {mode_label}")
     print(f"Golden Set: {len(golden_set)} 题  |  Top-K: {TOP_K}  |  City: {CITY}")
     print("=" * 70)
 
@@ -149,12 +178,13 @@ def run_evaluation(golden_set: list, mode: str = "vector") -> dict:
             k=TOP_K,
             city=CITY,
             mode=mode,
+            rrf_k=rrf_k,
         )
         result["id"] = item["id"]
         result["category"] = item["category"]
         details.append(result)
 
-        status = "✅" if result["hit_at_5"] else "❌"
+        status = "OK " if result["hit_at_5"] else "MISS"
         recall_str = f"Recall={result['recall_at_5']:.2f}"
         print(f"  [{status}] {item['id']} {recall_str} | {item['question'][:50]}...")
 
@@ -169,14 +199,17 @@ def run_evaluation(golden_set: list, mode: str = "vector") -> dict:
     all_hits = [1 if d["hit_at_5"] else 0 for d in details]
     all_mrrs = [d["mrr"] for d in details]
     all_latencies = [d["latency_ms"] for d in details if d["latency_ms"] > 0]
-    all_scores = [d["top1_score"] for d in details if d["top1_score"] > 0]
+    # 只统计真正有返回结果的题，避免把空检索当 0 分拉低均值
+    all_scores = [d["top1_score"] for d in details
+                  if not d.get("error") and d["retrieved"]]
 
     bad_cases = [d for d in details if not d["hit_at_5"]]
     perfect_cases = [d for d in details if d["recall_at_5"] >= 1.0]
 
     summary = {
         "experiment": mode,
-        "config": {"top_k": TOP_K, "city": CITY, "retrieval": mode_label},
+        "config": {"top_k": TOP_K, "city": CITY, "retrieval": mode_label,
+                   "rrf_k": rrf_k if mode == "hybrid" else None},
         "golden_set_size": len(golden_set),
         "metrics": {
             "recall_at_5": round(sum(all_recalls) / len(all_recalls), 4),
@@ -207,6 +240,7 @@ def run_evaluation(golden_set: list, mode: str = "vector") -> dict:
     print(f"  Recall@5:  {m['recall_at_5']:.4f}  ({len(perfect_cases)}/{len(golden_set)} 题全命中)")
     print(f"  Hit@5:     {m['hit_at_5']:.4f}  ({len(golden_set) - len(bad_cases)}/{len(golden_set)} 题至少命中一个)")
     print(f"  MRR@5:     {m['mrr_at_5']:.4f}")
+    print(f"  Top1 均分:  {m['avg_top1_score']:.4f}")
     print(f"  平均延迟:   {m['avg_latency_ms']:.2f}ms")
 
     print(f"\n分维度 Recall@5:")
@@ -221,7 +255,6 @@ def run_evaluation(golden_set: list, mode: str = "vector") -> dict:
             print(f"        实际: {bc['retrieved'][:3]}")
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    filename = "hybrid_results.json" if mode == "hybrid" else "baseline_results.json"
     output_path = OUTPUT_DIR / filename
     output_data = {"summary": summary, "details": details}
     with open(output_path, "w", encoding="utf-8") as f:
@@ -232,44 +265,81 @@ def run_evaluation(golden_set: list, mode: str = "vector") -> dict:
     return summary
 
 
-def compare(baseline: dict, hybrid: dict):
-    """对比两种模式"""
-    print("\n" + "=" * 70)
-    print("对比报告 — Baseline vs BM25 Hybrid")
-    print("=" * 70)
+def compare(summaries: dict):
+    """对比多种模式。summaries: {mode: summary}"""
+    names = list(summaries.keys())
 
-    bm = baseline["metrics"]
-    hm = hybrid["metrics"]
-
-    # 计算变化
     def delta(new, old):
         if old == 0:
-            return "+∞" if new > 0 else "0%"
+            return "+inf" if new > 0 else "0%"
         pct = (new - old) / old * 100
         sign = "+" if pct >= 0 else ""
         return f"{sign}{pct:.1f}%"
 
-    print(f"\n{'指标':<20} {'Baseline':>10} {'Hybrid':>10} {'变化':>10}")
-    print("-" * 50)
-    for key, label in [("recall_at_5", "Recall@5"), ("hit_at_5", "Hit@5"), ("mrr_at_5", "MRR@5")]:
-        bv = bm[key]
-        hv = hm[key]
-        print(f"  {label:<18} {bv:>10.4f} {hv:>10.4f} {delta(hv, bv):>10}")
+    base_name = names[0]  # 第一列作为 baseline 基准
+    print("\n" + "=" * 78)
+    print("对比报告 — " + "  vs  ".join(MODES[n][0] for n in names))
+    print("=" * 78)
+    print("说明：『变化』列均为相对 Baseline(" + MODES[base_name][0] + ") 的百分变化")
 
-    print(f"\n{'维度':<20} {'Baseline':>10} {'Hybrid':>10} {'变化':>10}")
-    print("-" * 50)
-    for cat in baseline["category_breakdown"]:
-        br = baseline["category_breakdown"][cat]["recall_at_5"]
-        hr = hybrid["category_breakdown"].get(cat, {}).get("recall_at_5", 0)
-        print(f"  {cat:<18} {br:>10.4f} {hr:>10.4f} {delta(hr, br):>10}")
+    # 三列全展示：Baseline / RRF / Linear + 各自相对 Baseline 的 delta
+    col = 14
+    head = f"{'指标':<16}" + "".join(f"{MODES[n][0]:>{col}}" for n in names)
+    head += f"{'RRF vs Base':>{col}}{'Linear vs Base':>{col}}"
+    print(f"\n{head}")
+    print("-" * (16 + col * (len(names) + 2)))
 
-    # Bad Case 变化
-    bb = set(baseline["bad_case_ids"])
-    hb = set(hybrid["bad_case_ids"])
-    fixed = bb - hb
-    new_bad = hb - bb
-    print(f"\nBad Case 变化:")
-    print(f"  Baseline: {len(bb)} 题 → Hybrid: {len(hb)} 题")
+    metrics_rows = [("recall_at_5", "Recall@5"), ("hit_at_5", "Hit@5"),
+                    ("mrr_at_5", "MRR@5"), ("avg_top1_score", "Top1 均分")]
+    for key, label in metrics_rows:
+        vals = [summaries[n]["metrics"][key] for n in names]
+        row = f"  {label:<14}" + "".join(f"{v:>{col}.4f}" for v in vals)
+        if "hybrid" in names:
+            row += f"{delta(summaries['hybrid']['metrics'][key], summaries[base_name]['metrics'][key]):>{col}}"
+        else:
+            row += f"{'—':>{col}}"
+        if "linear" in names:
+            row += f"{delta(summaries['linear']['metrics'][key], summaries[base_name]['metrics'][key]):>{col}}"
+        else:
+            row += f"{'—':>{col}}"
+        print(row)
+
+    lat = [summaries[n]["metrics"]["avg_latency_ms"] for n in names]
+    row = f"  {'平均延迟(ms)':<14}" + "".join(f"{v:>{col}.1f}" for v in lat)
+    if "hybrid" in names:
+        row += f"{delta(summaries['hybrid']['metrics']['avg_latency_ms'], summaries[base_name]['metrics']['avg_latency_ms']):>{col}}"
+    else:
+        row += f"{'—':>{col}}"
+    if "linear" in names:
+        row += f"{delta(summaries['linear']['metrics']['avg_latency_ms'], summaries[base_name]['metrics']['avg_latency_ms']):>{col}}"
+    else:
+        row += f"{'—':>{col}}"
+    print(row)
+
+    print(f"\n{'维度':<16}" + "".join(f"{MODES[n][0]:>{col}}" for n in names)
+          + f"{'RRF vs Base':>{col}}{'Linear vs Base':>{col}}")
+    print("-" * (16 + col * (len(names) + 2)))
+    for cat in summaries[base_name]["category_breakdown"]:
+        vals = [summaries[n]["category_breakdown"][cat]["recall_at_5"]
+                if cat in summaries[n]["category_breakdown"] else 0.0
+                for n in names]
+        row = f"  {cat:<14}" + "".join(f"{v:>{col}.4f}" for v in vals)
+        if "hybrid" in names:
+            row += f"{delta(summaries['hybrid']['category_breakdown'][cat]['recall_at_5'], summaries[base_name]['category_breakdown'][cat]['recall_at_5']):>{col}}"
+        else:
+            row += f"{'—':>{col}}"
+        if "linear" in names:
+            row += f"{delta(summaries['linear']['category_breakdown'][cat]['recall_at_5'], summaries[base_name]['category_breakdown'][cat]['recall_at_5']):>{col}}"
+        else:
+            row += f"{'—':>{col}}"
+        print(row)
+
+    # Bad Case 变化：以首个模式为基准
+    base = set(summaries[base_name]["bad_case_ids"])
+    last = set(summaries[names[-1]]["bad_case_ids"])
+    fixed, new_bad = base - last, last - base
+    print(f"\nBad Case 变化（{MODES[base_name][0]} → {MODES[names[-1]][0]}）:")
+    print(f"  {len(base)} 题 → {len(last)} 题")
     if fixed:
         print(f"  修复: {sorted(fixed)}")
     if new_bad:
@@ -279,24 +349,30 @@ def compare(baseline: dict, hybrid: dict):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="RAG 评估脚本")
-    parser.add_argument("--hybrid", action="store_true", help="只跑 BM25 混合检索")
-    parser.add_argument("--compare", action="store_true", help="对比 Baseline 和 Hybrid")
+    parser.add_argument("--vector", action="store_true", help="只跑纯向量 baseline")
+    parser.add_argument("--hybrid", action="store_true", help="只跑 RRF 混合检索（默认）")
+    parser.add_argument("--linear", action="store_true", help="只跑线性加权融合")
+    parser.add_argument("--compare", action="store_true", help="三种模式全跑并对比")
+    parser.add_argument("--rrf-k", type=int, default=DEFAULT_RRF_K,
+                        help=f"RRF 平滑常数（默认 {DEFAULT_RRF_K}）")
     args = parser.parse_args()
 
     golden_set = load_golden_set(GOLDEN_SET_PATH)
 
     if args.compare:
-        # 跑两种模式并对比
-        print(">>> 阶段 1/2: Baseline 评估\n")
-        baseline_summary = run_evaluation(golden_set, mode="vector")
-        print("\n\n>>> 阶段 2/2: BM25 Hybrid 评估\n")
-        hybrid_summary = run_evaluation(golden_set, mode="hybrid")
-        compare(baseline_summary, hybrid_summary)
-    elif args.hybrid:
-        run_evaluation(golden_set, mode="hybrid")
+        order = ["vector", "hybrid", "linear"]
+        summaries = {}
+        for i, mode in enumerate(order, 1):
+            print(f"\n>>> 阶段 {i}/{len(order)}: {MODES[mode][0]}\n")
+            summaries[mode] = run_evaluation(golden_set, mode=mode, rrf_k=args.rrf_k)
+        compare(summaries)
+    elif args.vector:
+        run_evaluation(golden_set, mode="vector", rrf_k=args.rrf_k)
+    elif args.linear:
+        run_evaluation(golden_set, mode="linear", rrf_k=args.rrf_k)
     else:
-        run_evaluation(golden_set, mode="vector")
+        run_evaluation(golden_set, mode="hybrid", rrf_k=args.rrf_k)
 
     print("\n" + "=" * 70)
-    print("评估完成 ✅")
+    print("评估完成")
     print("=" * 70)

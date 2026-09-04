@@ -109,5 +109,7 @@ monitoring:
 # ---------- 向量库（v3 · Milvus） ----------
 vectordb:
   backend: "milvus"
-  uri: "http://127.0.0.1:19530"
+  # Milvus Lite 嵌入式模式（无需 Docker，本地 .db 文件）
+  # 若部署完整版 Milvus 服务，改回: http://127.0.0.1:19530
+  uri: "data/vectordb/milvus_lite.db"
   collection: "knowledge"

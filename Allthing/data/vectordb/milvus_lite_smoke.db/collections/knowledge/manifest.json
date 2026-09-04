@@ -1,0 +1,95 @@
+{
+  "active_wal_number": 2,
+  "current_seq": 1,
+  "index_specs": {
+    "dense": {
+      "build_params": {},
+      "field_name": "dense",
+      "index_type": "HNSW",
+      "metric_type": "IP",
+      "search_params": {}
+    },
+    "sparse": {
+      "build_params": {},
+      "field_name": "sparse",
+      "index_type": "AUTOINDEX",
+      "metric_type": "BM25",
+      "search_params": {}
+    }
+  },
+  "manifest_format_version": 2,
+  "partitions": {
+    "_default": {
+      "data_files": [],
+      "delta_files": []
+    },
+    "_pk_0": {
+      "data_files": [],
+      "delta_files": []
+    },
+    "_pk_1": {
+      "data_files": [],
+      "delta_files": []
+    },
+    "_pk_10": {
+      "data_files": [
+        "data/data_000001_000001.parquet"
+      ],
+      "delta_files": []
+    },
+    "_pk_11": {
+      "data_files": [],
+      "delta_files": []
+    },
+    "_pk_12": {
+      "data_files": [],
+      "delta_files": []
+    },
+    "_pk_13": {
+      "data_files": [],
+      "delta_files": []
+    },
+    "_pk_14": {
+      "data_files": [],
+      "delta_files": []
+    },
+    "_pk_15": {
+      "data_files": [],
+      "delta_files": []
+    },
+    "_pk_2": {
+      "data_files": [],
+      "delta_files": []
+    },
+    "_pk_3": {
+      "data_files": [],
+      "delta_files": []
+    },
+    "_pk_4": {
+      "data_files": [],
+      "delta_files": []
+    },
+    "_pk_5": {
+      "data_files": [],
+      "delta_files": []
+    },
+    "_pk_6": {
+      "data_files": [],
+      "delta_files": []
+    },
+    "_pk_7": {
+      "data_files": [],
+      "delta_files": []
+    },
+    "_pk_8": {
+      "data_files": [],
+      "delta_files": []
+    },
+    "_pk_9": {
+      "data_files": [],
+      "delta_files": []
+    }
+  },
+  "schema_version": 1,
+  "version": 3
+}

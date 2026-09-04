@@ -27,6 +27,14 @@
 
 		<!-- 头像弹出面板 -->
 		<view v-if="showUserPopup" class="user-popup-panel">
+			<!-- 用户信息 -->
+			<view class="popup-user-info">
+				<view class="popup-avatar">
+					<text>{{ authStore.username ? authStore.username.charAt(0).toUpperCase() : '?' }}</text>
+				</view>
+				<text class="popup-username">{{ authStore.username || '未登录' }}</text>
+			</view>
+
 			<view class="popup-section">
 				<text class="popup-section-title">对话管理</text>
 				<view class="popup-item" @click="handleNewChat">
@@ -36,17 +44,18 @@
 				<view class="popup-item" @click="showThreadList = !showThreadList">
 					<text class="popup-icon">📋</text>
 					<text>对话列表</text>
+					<text class="popup-count">{{ chatStore.conversations.length }}</text>
 				</view>
 				<view v-if="showThreadList" class="popup-sub">
 					<view
 						v-for="conv in chatStore.conversations"
-						:key="conv.threadId"
+						:key="conv.thread_id || conv.id"
 						class="popup-sub-item"
-						:class="{ active: conv.threadId === chatStore.currentThreadId }"
-						@click="switchThread(conv.threadId)"
+						:class="{ active: (conv.thread_id || conv.id) === chatStore.currentThreadId }"
+						@click="switchThread(conv.thread_id || conv.id)"
 					>
-						<text class="popup-sub-name">{{ conv.name }}</text>
-						<text class="popup-sub-del" @click.stop="deleteThread(conv.threadId)">🗑</text>
+						<text class="popup-sub-name">{{ conv.title || '新对话' }}</text>
+						<text class="popup-sub-del" @click.stop="deleteThread(conv.thread_id || conv.id)">🗑</text>
 					</view>
 					<text v-if="chatStore.conversations.length === 0" class="popup-sub-empty">暂无对话</text>
 				</view>
@@ -62,6 +71,10 @@
 					<text class="popup-icon">🧠</text>
 					<text>模型设置</text>
 					<text class="popup-val">{{ currentModel }}</text>
+				</view>
+				<view class="popup-item" @click="handleLogout">
+					<text class="popup-icon">🚪</text>
+					<text>退出登录</text>
 				</view>
 				<view class="popup-item" @click="handleAbout">
 					<text class="popup-icon">ℹ️</text>
@@ -84,7 +97,7 @@
 				</view>
 				<view class="navbar-right" @click="showUserPopup = !showUserPopup">
 					<view class="avatar-circle">
-						<text class="avatar-text">🧑</text>
+						<text class="avatar-text">{{ authStore.username ? authStore.username.charAt(0).toUpperCase() : '🧑' }}</text>
 					</view>
 				</view>
 			</view>
@@ -92,53 +105,60 @@
 
 		<!-- 中间对话区域 -->
 		<view class="chat-area">
-			<scroll-view
-				class="message-list"
-				scroll-y
-				:scroll-into-view="scrollToId"
-				:scroll-with-animation="true"
-			>
-				<view v-if="chatStore.messages.length === 0" class="empty-state">
-					<image class="empty-logo" src="/static/logo.png" mode="aspectFit"></image>
-					<text class="empty-title">LifeOps Agent</text>
-					<text class="empty-desc">智能生活管家，随时为您服务</text>
-					<view class="quick-actions">
-						<view class="quick-btn" @click="quickSend('本月账单汇总')">
-							<text>💳 本月账单</text>
-						</view>
-						<view class="quick-btn" @click="quickSend('推荐附近好吃的乳鸽店')">
-							<text>🍗 附近美食</text>
-						</view>
-						<view class="quick-btn" @click="quickSend('今天天气怎么样')">
-							<text>🌤 今日天气</text>
-						</view>
-						<view class="quick-btn" @click="quickSend('中山有哪些值得去的景点')">
-							<text>🗺 景点推荐</text>
+			<!-- 加载中 -->
+			<view v-if="chatStore.isLoading" class="loading-box">
+				<text class="loading-text">⏳ 加载对话中...</text>
+			</view>
+
+			<template v-else>
+				<scroll-view
+					class="message-list"
+					scroll-y
+					:scroll-into-view="scrollToId"
+					:scroll-with-animation="true"
+				>
+					<view v-if="chatStore.messages.length === 0" class="empty-state">
+						<image class="empty-logo" src="/static/logo.png" mode="aspectFit"></image>
+						<text class="empty-title">LifeOps Agent</text>
+						<text class="empty-desc">智能生活管家，随时为您服务</text>
+						<view class="quick-actions">
+							<view class="quick-btn" @click="quickSend('本月账单汇总')">
+								<text>💳 本月账单</text>
+							</view>
+							<view class="quick-btn" @click="quickSend('推荐附近好吃的乳鸽店')">
+								<text>🍗 附近美食</text>
+							</view>
+							<view class="quick-btn" @click="quickSend('今天天气怎么样')">
+								<text>🌤 今日天气</text>
+							</view>
+							<view class="quick-btn" @click="quickSend('中山有哪些值得去的景点')">
+								<text>🗺 景点推荐</text>
+							</view>
 						</view>
 					</view>
-				</view>
 
-				<view
-					v-for="(msg, idx) in chatStore.messages"
-					:key="msg.id"
-					:id="'msg-' + idx"
-				>
-					<MessageBubble
-						:message="msg"
-						:is-last="idx === chatStore.messages.length - 1"
-					/>
-				</view>
+					<view
+						v-for="(msg, idx) in chatStore.messages"
+						:key="msg.id"
+						:id="'msg-' + idx"
+					>
+						<MessageBubble
+							:message="msg"
+							:is-last="idx === chatStore.messages.length - 1"
+						/>
+					</view>
 
-				<view v-if="chatStore.isStreaming" class="streaming-indicator">
-					<view class="typing-dot"></view>
-					<view class="typing-dot"></view>
-					<view class="typing-dot"></view>
-				</view>
+					<view v-if="chatStore.isStreaming" class="streaming-indicator">
+						<view class="typing-dot"></view>
+						<view class="typing-dot"></view>
+						<view class="typing-dot"></view>
+					</view>
 
-				<view class="bottom-spacer"></view>
-			</scroll-view>
+					<view class="bottom-spacer"></view>
+				</scroll-view>
 
-			<InputBar @send="handleSend" />
+				<InputBar @send="handleSend" />
+			</template>
 		</view>
 
 	</view>
@@ -147,11 +167,13 @@
 <script setup>
 	import { ref, watch, nextTick, onMounted, computed } from 'vue'
 	import { useChatStore } from '@/store/chat.js'
+	import { useAuthStore } from '@/store/auth.js'
 	import MessageBubble from '@/components/MessageBubble.vue'
 	import InputBar from '@/components/InputBar.vue'
 	import BillCenter from '@/components/BillCenter.vue'
 
 	const chatStore = useChatStore()
+	const authStore = useAuthStore()
 
 	const showLeftDrawer = ref(false)
 	const showUserPopup = ref(false)
@@ -162,19 +184,21 @@
 	const serverHost = computed(() => {
 		const host = uni.getStorageSync('api_host') || 'localhost'
 		const port = uni.getStorageSync('api_port') || '8000'
-		return `${host}:${port}`
+		return host + ':' + port
 	})
 
 	const currentModel = computed(() => {
 		return uni.getStorageSync('model_name') || 'qwen-max'
 	})
 
-	onMounted(() => {
+	onMounted(async () => {
 		const si = uni.getSystemInfoSync()
 		statusBarHeight.value = si.statusBarHeight || 20
 		chatStore.screenWidth = si.screenWidth
 		chatStore.screenHeight = si.screenHeight
-		chatStore.connect('default')
+
+		// 初始化对话（从后端加载）
+		await chatStore.init()
 	})
 
 	function toggleLeftDrawer() {
@@ -209,7 +233,7 @@
 	})
 
 	function switchThread(threadId) {
-		chatStore.connect(threadId)
+		chatStore.switchConversation(threadId)
 		showThreadList.value = false
 		showUserPopup.value = false
 	}
@@ -234,13 +258,27 @@
 			title: '新建对话',
 			editable: true,
 			placeholderText: '输入对话名称',
-			success: (res) => {
-				if (res.confirm && res.content) {
-					chatStore.newConversation(res.content)
-				} else if (res.confirm) {
-					chatStore.newConversation()
+			success: async (res) => {
+				if (res.confirm) {
+					await chatStore.newConversation(res.content || '新对话')
+				} else {
+					await chatStore.newConversation('新对话')
 				}
 				showUserPopup.value = false
+			}
+		})
+	}
+
+	function handleLogout() {
+		uni.showModal({
+			title: '退出登录',
+			content: '确定要退出登录吗？',
+			success: (res) => {
+				if (res.confirm) {
+					authStore.logout()
+					chatStore.disconnect()
+					uni.reLaunch({ url: '/pages/login/login' })
+				}
 			}
 		})
 	}
@@ -253,9 +291,11 @@
 			content: serverHost.value,
 			success: (res) => {
 				if (res.confirm && res.content) {
-					const [host, port] = res.content.split(':')
-					uni.setStorageSync('api_host', host || 'localhost')
-					uni.setStorageSync('api_port', port || '8000')
+					const parts = res.content.split(':')
+					const host = parts[0] || 'localhost'
+					const port = parts[1] || '8000'
+					uni.setStorageSync('api_host', host)
+					uni.setStorageSync('api_port', port)
 					uni.showToast({ title: '配置已保存', icon: 'success' })
 				}
 			}
@@ -268,7 +308,7 @@
 			success: (res) => {
 				const models = ['qwen-max', 'qwen-plus', 'qwen-turbo']
 				uni.setStorageSync('model_name', models[res.tapIndex])
-				uni.showToast({ title: `已切换至 ${models[res.tapIndex]}`, icon: 'success' })
+				uni.showToast({ title: '已切换至 ' + models[res.tapIndex], icon: 'success' })
 			}
 		})
 	}
@@ -364,6 +404,36 @@
 		to { opacity: 1; transform: translateY(0) scale(1); }
 	}
 
+	.popup-user-info {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 14px 16px;
+		border-bottom: 1px solid #f0f0f0;
+	}
+
+	.popup-avatar {
+		width: 36px;
+		height: 36px;
+		border-radius: 50%;
+		background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+
+		text {
+			color: #fff;
+			font-size: 16px;
+			font-weight: 600;
+		}
+	}
+
+	.popup-username {
+		font-size: 15px;
+		font-weight: 600;
+		color: #333;
+	}
+
 	.popup-section {
 		padding: 8px 0;
 		border-bottom: 1px solid #f0f0f0;
@@ -390,6 +460,14 @@
 
 		.popup-icon { font-size: 16px; }
 		.popup-val { font-size: 11px; color: #bbb; margin-left: auto; }
+		.popup-count {
+			font-size: 11px;
+			color: #fff;
+			background-color: #007aff;
+			border-radius: 10px;
+			padding: 1px 8px;
+			margin-left: auto;
+		}
 	}
 
 	.popup-sub {
@@ -467,13 +545,12 @@
 		width: 32px;
 		height: 32px;
 		border-radius: 50%;
-		background-color: #f0f7ff;
+		background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		border: 2px solid #e0edff;
 
-		.avatar-text { font-size: 18px; }
+		.avatar-text { color: #fff; font-size: 16px; font-weight: 600; }
 	}
 
 	// 对话区域
@@ -482,6 +559,15 @@
 		display: flex;
 		flex-direction: column;
 		overflow: hidden;
+	}
+
+	.loading-box {
+		flex: 1;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+
+		.loading-text { font-size: 14px; color: #999; }
 	}
 
 	.message-list {

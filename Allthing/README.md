@@ -127,7 +127,7 @@ npm run dev:mp-weixin
 
 | 层级 | 来源 | 触发条件 |
 |------|------|---------|
-| 第①层 | 本地经验库（ChromaDB 向量检索） | 每次查询必调 |
+| 第①层 | 本地经验库（Milvus 向量检索） | 每次查询必调 |
 | 第②层 | 百度地图 API | RAG 返回空或需要实时信息 |
 | 第③层 | 联网搜索（模型内置） | RAG + 百度都无结果 |
 
@@ -171,7 +171,7 @@ Travel Agent 产出推荐后，Critic 对推荐内容做 RAG 反向交叉验证�
 │   └── data/                            # 运行时数据（gitignore）
 │       ├── bills/                       # 账单 CSV
 │       ├── checkpoints/                 # SQLite checkpoint
-│       ├── vectordb/                    # ChromaDB
+│       ├── vectordb/                    # Milvus Lite（.db 嵌入式）
 │       └── savings/                     # 省钱目标
 │
 └── LifeOps助手/                         # 前端（uni-app + Vue3）
@@ -192,7 +192,7 @@ Travel Agent 产出推荐后，Critic 对推荐内容做 RAG 反向交叉验证�
 | 编排 | LangGraph StateGraph + SqliteSaver | 图状态机 + 多用户 checkpoint 持久化 |
 | LLM | 通义千问 qwen-plus / qwen-max | ChatTongyi，支持 enable_thinking |
 | Embedding | DashScope text-embedding-v2 | 1536 维 |
-| 向量库 | ChromaDB PersistentClient | 本地磁盘持久化 |
+| 向量库 | Milvus Lite 嵌入式（服务端稠密+BM25 混合检索降级为应用层管线） | 本地 .db 文件持久化 |
 | 地图 | 百度地图 Web 服务 API | POI搜索/详情/路线/天气/地理编码 |
 | 数据处理 | pandas + matplotlib | CSV 解析、图表生成 |
 | 后端框架 | FastAPI + WebSocket | REST API + 实时通信 |

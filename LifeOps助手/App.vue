@@ -2,6 +2,25 @@
 	export default {
 		onLaunch: function() {
 			console.log('LifeOps Agent 启动')
+			// 检查是否已登录
+			const token = uni.getStorageSync('auth_token')
+			const user = uni.getStorageSync('auth_user')
+
+			// 获取当前页面路由
+			const pages = getCurrentPages()
+			const currentRoute = pages.length > 0 ? pages[0].route : ''
+
+			if (token && user) {
+				// 已登录，如果当前是登录页，跳转到主页面
+				if (currentRoute === 'pages/login/login') {
+					uni.switchTab({ url: '/pages/index/index' })
+				}
+			} else {
+				// 未登录，如果当前不是登录页，跳转到登录页
+				if (currentRoute !== 'pages/login/login' && currentRoute !== '') {
+					uni.reLaunch({ url: '/pages/login/login' })
+				}
+			}
 		},
 		onShow: function() {
 			console.log('LifeOps Agent 前台展示')

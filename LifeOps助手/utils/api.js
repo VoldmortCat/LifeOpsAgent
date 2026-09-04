@@ -11,9 +11,15 @@ function getBaseUrl() {
 	return port === '80' ? `http://${host}` : `http://${host}:${port}`
 }
 
+function getAuthHeader() {
+	const token = uni.getStorageSync('auth_token')
+	return token ? { 'Authorization': `Bearer ${token}` } : {}
+}
+
 function request(options) {
 	return new Promise((resolve, reject) => {
 		const baseUrl = getBaseUrl()
+		const authHeader = getAuthHeader()
 		uni.request({
 			url: `${baseUrl}${options.url}`,
 			method: options.method || 'GET',
@@ -21,11 +27,18 @@ function request(options) {
 			timeout: options.timeout || 15000,
 			header: {
 				'Content-Type': 'application/json',
+				...authHeader,
 				...(options.header || {})
 			},
 			success: (res) => {
 				if (res.statusCode >= 200 && res.statusCode < 300) {
 					resolve(res.data)
+				} else if (res.statusCode === 401) {
+					// Token expired or invalid
+					uni.removeStorageSync('auth_token')
+					uni.removeStorageSync('auth_user')
+					uni.reLaunch({ url: '/pages/login/login' })
+					reject(new Error('登录已过期，请重新登录'))
 				} else {
 					reject(new Error(`HTTP ${res.statusCode}: ${res.errMsg || '未知错误'}`))
 				}
@@ -35,6 +48,28 @@ function request(options) {
 			}
 		})
 	})
+}
+
+// ============ 认证 API ============
+
+export function login(username, password) {
+	return request({
+		url: '/api/auth/login',
+		method: 'POST',
+		data: { username, password },
+	})
+}
+
+export function register(username, password, displayName = '') {
+	return request({
+		url: '/api/auth/register',
+		method: 'POST',
+		data: { username, password, display_name: displayName },
+	})
+}
+
+export function getMe() {
+	return request({ url: '/api/auth/me' })
 }
 
 // ============ 账单 API ============
@@ -57,10 +92,12 @@ export function getDocList() {
 export function uploadDocument(filePath, category = 'other') {
 	return new Promise((resolve, reject) => {
 		const baseUrl = getBaseUrl()
+		const authHeader = getAuthHeader()
 		uni.uploadFile({
 			url: `${baseUrl}/api/docs/import?category=${category}`,
 			filePath: filePath,
 			name: 'file',
+			header: authHeader,
 			success: (res) => {
 				try {
 					resolve(JSON.parse(res.data))
@@ -95,8 +132,24 @@ export function getConversations() {
 	return request({ url: '/api/conversations' })
 }
 
+export function getConversation(threadId) {
+	return request({ url: `/api/conversations/${threadId}` })
+}
+
+export function createConversation() {
+	return request({ url: '/api/conversations', method: 'POST' })
+}
+
 export function deleteConversation(threadId) {
 	return request({ url: `/api/conversations/${threadId}`, method: 'DELETE' })
+}
+
+export function updateConversation(threadId, title) {
+	return request({
+		url: `/api/conversations/${threadId}`,
+		method: 'PUT',
+		data: { title }
+	})
 }
 
 // ============ 用户配置 API ============
@@ -123,7 +176,13 @@ export default {
 	getRagStatus,
 	runRagTest,
 	getConversations,
+	getConversation,
+	createConversation,
 	deleteConversation,
+	updateConversation,
 	getUserConfig,
 	saveUserConfig,
+	login,
+	register,
+	getMe,
 }

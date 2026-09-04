@@ -1,15 +1,17 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { createWebSocket } from '@/utils/websocket.js'
+import { getConversations, getConversation, createConversation, deleteConversation as apiDeleteConversation } from '@/utils/api.js'
 
 export const useChatStore = defineStore('chat', () => {
 	// ============ 对话状态 ============
 	const conversations = ref([])
-	const currentThreadId = ref('default')
+	const currentThreadId = ref('')
 	const messages = ref([])
 	const isConnected = ref(false)
 	const isStreaming = ref(false)
 	const wsClient = ref(null)
+	const isLoading = ref(false)
 
 	// ============ 设备信息 ============
 	const screenWidth = ref(375)
@@ -17,13 +19,90 @@ export const useChatStore = defineStore('chat', () => {
 
 	// ============ 计算属性 ============
 	const currentConversation = computed(() => {
-		return conversations.value.find(c => c.threadId === currentThreadId.value)
+		return conversations.value.find(c => c.thread_id === currentThreadId.value)
 	})
 
 	const lastAgentMessage = computed(() => {
 		const agentMsgs = messages.value.filter(m => m.role === 'agent')
 		return agentMsgs.length > 0 ? agentMsgs[agentMsgs.length - 1] : null
 	})
+
+	// ============ 初始化 ============
+	async function init() {
+		isLoading.value = true
+		try {
+			const res = await getConversations()
+			if (res && res.conversations) {
+				conversations.value = res.conversations
+				// 自动选择最新的对话
+				if (conversations.value.length > 0) {
+					const latest = conversations.value[0]
+					currentThreadId.value = latest.thread_id
+					await loadMessages(latest.thread_id)
+				} else {
+					// 无对话，创建新对话
+					await createNewConversation()
+				}
+			}
+		} catch (e) {
+			console.error('加载对话列表失败:', e)
+			// 创建默认对话
+			if (!currentThreadId.value) {
+				createNewConversation()
+			}
+		} finally {
+			isLoading.value = false
+		}
+		// 连接 WebSocket
+		if (currentThreadId.value) {
+			connect(currentThreadId.value)
+		}
+	}
+
+	async function loadMessages(threadId) {
+		try {
+			const res = await getConversation(threadId)
+			if (res && res.ok && res.messages) {
+				// 转换后端消息格式为前端格式
+				messages.value = res.messages.map(m => ({
+					id: `msg_${m.id}`,
+					role: m.role,
+					content: m.content,
+					timestamp: new Date(m.created_at).getTime(),
+					msg_type: m.msg_type,
+				}))
+			} else {
+				messages.value = []
+			}
+		} catch (e) {
+			console.error('加载消息失败:', e)
+			messages.value = []
+		}
+	}
+
+	async function createNewConversation(name = '新对话') {
+		try {
+			const res = await createConversation()
+			if (res && res.ok && res.conversation) {
+				conversations.value.unshift(res.conversation)
+				currentThreadId.value = res.conversation.thread_id
+				messages.value = []
+				connect(res.conversation.thread_id)
+			}
+		} catch (e) {
+			// 离线回退：创建本地对话
+			const threadId = `thread_local_${Date.now()}`
+			conversations.value.unshift({
+				thread_id: threadId,
+				title: name,
+				msg_count: 0,
+				created_at: new Date().toISOString(),
+			})
+			currentThreadId.value = threadId
+			messages.value = []
+			connect(threadId)
+		}
+	}
 
 	// ============ WebSocket 连接 ============
 	function connect(threadId) {
@@ -197,7 +276,14 @@ export const useChatStore = defineStore('chat', () => {
 		const trimmed = content.trim()
 
 		if (trimmed === '/help') {
-			return `**LifeOps Agent 帮助**\n\n| 命令 | 功能 |\n|------|------|\n| /help | 查看帮助 |\n| /rag | RAG 监控仪表盘 |\n| /rag_test | 运行 RAG 批量评估 |\n| 切换用户 <名> | 切换 thread_id |\n| quit / exit / q | 退出 |`
+			return `**LifeOps Agent 帮助**
+
+| 命令 | 功能 |
+|------|------|
+| /help | 查看帮助 |
+| /rag | RAG 监控仪表盘 |
+| /rag_test | 运行 RAG 批量评估 |
+| quit / exit / q | 退出 |`
 		}
 		if (trimmed === 'quit' || trimmed === 'exit' || trimmed === 'q') {
 			return '再见！如需重新开始对话，请刷新页面。'
@@ -212,44 +298,71 @@ export const useChatStore = defineStore('chat', () => {
 			return '请指定用户名，例如：切换用户 张三'
 		}
 		if (trimmed === '/rag') {
-			return '📊 RAG 监控仪表盘\n\n正在加载监控数据...\n\n> 提示：请前往「个人中心 → RAG 监控」查看完整仪表盘'
+			return '📊 RAG 监控仪表盘
+
+正在加载监控数据...
+
+> 提示：请前往「个人中心 → RAG 监控」查看完整仪表盘'
 		}
 		if (trimmed === '/rag_test') {
-			return '🧪 RAG 批量评估\n\n正在运行 5 条测试用例...\n\n> 提示：请前往「个人中心 → RAG 监控 → 检索测试」运行完整评估'
+			return '🧪 RAG 批量评估
+
+正在运行 5 条测试用例...
+
+> 提示：请前往「个人中心 → RAG 监控 → 检索测试」运行完整评估'
 		}
 
 		return null
 	}
 
-	// ============ 消息管理 ============
+	// ============ 对话管理 ============
 	function clearMessages() {
 		messages.value = []
 		streamBuffer.value = []
 	}
 
-	function newConversation(name) {
-		const threadId = `thread_${Date.now()}`
-		conversations.value.unshift({
-			threadId,
-			name: name || `对话 ${conversations.value.length + 1}`,
-			createdAt: Date.now(),
-			lastMessage: ''
-		})
+	async function newConversation(name) {
+		await createNewConversation(name || '新对话')
+	}
+
+	async function switchConversation(threadId) {
+		if (threadId === currentThreadId.value) return
 		currentThreadId.value = threadId
 		clearMessages()
+		await loadMessages(threadId)
 		connect(threadId)
 	}
 
-	function deleteConversation(threadId) {
-		conversations.value = conversations.value.filter(c => c.threadId !== threadId)
+	async function deleteConversation(threadId) {
+		// 本地删除
+		conversations.value = conversations.value.filter(c => c.thread_id !== threadId)
+
+		// 后端删除
+		try {
+			await apiDeleteConversation(threadId)
+		} catch (e) {
+			console.error('删除对话失败:', e)
+		}
+
+		// 如果删除的是当前对话，切换到下一个
 		if (currentThreadId.value === threadId) {
 			const first = conversations.value[0]
 			if (first) {
-				currentThreadId.value = first.threadId
-				connect(first.threadId)
+				await switchConversation(first.thread_id)
 			} else {
-				newConversation('新对话')
+				await createNewConversation('新对话')
 			}
+		}
+	}
+
+	async function refreshConversations() {
+		try {
+			const res = await getConversations()
+			if (res && res.conversations) {
+				conversations.value = res.conversations
+			}
+		} catch (e) {
+			console.error('刷新对话列表失败:', e)
 		}
 	}
 
@@ -265,14 +378,18 @@ export const useChatStore = defineStore('chat', () => {
 		messages,
 		isConnected,
 		isStreaming,
+		isLoading,
 		screenWidth,
 		screenHeight,
 		lastAgentMessage,
+		init,
 		connect,
 		disconnect,
 		sendMessage,
 		clearMessages,
 		newConversation,
-		deleteConversation
+		switchConversation,
+		deleteConversation,
+		refreshConversations,
 	}
 })

@@ -143,7 +143,7 @@
 	function pickFile(category) {
 		uni.chooseFile({
 			count: 1,
-			extension: ['.md', '.pdf', '.txt', '.csv', '.json', '.yml', '.yaml'],
+			extension: ['.md'],
 			success: async (res) => {
 				const file = res.tempFiles[0]
 				if (!file) return
